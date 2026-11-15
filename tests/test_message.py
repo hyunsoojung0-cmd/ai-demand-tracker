@@ -25,6 +25,10 @@ EXPECTED = """\
 6. Hugging Face 다운로드
    - 데이터 없음 (요청 실패)
 종합: Stable
+📝 판단 근거: 4개 지표 중 강세 2 · 중립 1 · 약세 1
+   강세: Vast H100·H200 가격 상승 / 약세: vLLM 다운로드 7일 평균 하회
+🔄 주요 변동: Vast H200 +48%, Vast H100 +33%, Vast B200 +29%
+💡 해설: vLLM 다운로드 감소는 배포 채널이 바뀐 영향일 수 있습니다.
 📈 시트: SHEET
 Data: Vast.ai
 Source: OpenRouter (CC BY 4.0)""".replace("SHEET", SHEET_URL)

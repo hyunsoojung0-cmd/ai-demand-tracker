@@ -15,6 +15,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from ai_demand.backfill import backfill
+from ai_demand.backfill6m import BACKFILL_6M_CSV
+from ai_demand.commentary import merge_history
 from ai_demand.config import SPOT_COLUMNS, SPOT_INSTANCES, VAST_DISPLAY
 from ai_demand.errors import SourceError
 from ai_demand.huggingface import fetch_huggingface, implied_download, implied_moving_average
@@ -321,7 +323,13 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
             else f"hf: {huggingface.failed}/{huggingface.basket_size} models failed"
         ),
     )
-    message = render(view)
+    backfill_rows: list[dict[str, str]] = []
+    if BACKFILL_6M_CSV.exists():
+        try:
+            backfill_rows = read_rows(BACKFILL_6M_CSV)
+        except Exception as exc:
+            log.warning("backfill file skipped: %s", type(exc).__name__)
+    message = render(view, score=scored, history=merge_history(rows, backfill_rows), notes=notes)
     print(message)
 
     any_ok = any(item is not None for item in (spot, vast, pypi, pjm, openrouter, huggingface))
