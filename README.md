@@ -166,7 +166,7 @@ Actions의 **6개월 백필** 워크플로는 수동 실행만 됩니다. `data/
 | --- | --- |
 | vLLM `vllm_last_day`, `vllm_7d_ma` | pypistats `/overall`의 `without_mirrors`. 2026-11-15 기준 2026-05-18부터 2026-11-14까지 181일이 빈틈없이 있습니다. 7일 평균은 그날 포함 7일이 모두 있을 때만 채웁니다 |
 | Vast `vast_*_median` | 공개 피드 `daily[]` 중간값만. 최저가는 비웁니다. 2026-11-15 기준 피드는 최근 90일(2026-08-17~2026-11-14)만 보관합니다 |
-| PJM `pjm_overnight_mw`, `pjm_overnight_7d_ma` | EIA 시간별 PJM 수요. 한 번에 최대 5000건이라 `offset`으로 이어 받습니다. 야간은 미동부 00:00–05:00 평균이고, 7밤 평균은 그날까지의 완전한 밤 7개입니다. 키가 없으면 비웁니다 |
+| PJM `pjm_overnight_mw`, `pjm_overnight_7d_ma` | EIA 시간별 PJM 수요. 6개월을 `length=5000` 한 번으로 받으면 서버가 5xx 뒤 시간 초과를 내서, 2주 단위로 나눠 받습니다. `start`/`end`는 `YYYY-MM-DDTHH`입니다. 야간은 미동부 00:00–05:00 평균이고, 7밤 평균은 그날까지의 완전한 밤 7개입니다. 키가 없으면 비웁니다 |
 | OpenRouter `or_total_tokens`, `or_top5_share`, `or_top1_model` | `rankings-daily`. 한 요청은 최대 366일이라 더 길면 나눠 요청합니다. 키가 없으면 비웁니다. UTC 기준 아직 끝나지 않은 오늘은 뺍니다 |
 | Spot, Hugging Face, `overall`, Vast 최저가 | 공개 이력이 없으므로 항상 비웁니다 |
 
