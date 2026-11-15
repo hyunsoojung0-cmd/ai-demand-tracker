@@ -13,6 +13,34 @@ def _pct(frac: float) -> str:
     return f"{frac * 100:+.1f}%"
 
 
+def _stage(bucket: int) -> str:
+    return f"{bucket + 1}단계"
+
+
+def spot_history_suffix(current: int, prior: int | None, week: int | None) -> str:
+    """Arrow versus the previous row, plus the earlier stages.
+
+    Higher ``r`` is more interruption (↑), matching the Spot score. The
+    parenthetical is omitted when neither comparison has a value. A blank
+    7-day cell drops only the ``7일전`` clause.
+    """
+    if prior is None and week is None:
+        return ""
+    bits: list[str] = []
+    arrow = ""
+    if prior is not None:
+        if current > prior:
+            arrow = " ↑"
+        elif current < prior:
+            arrow = " ↓"
+        else:
+            arrow = " →"
+        bits.append("전일 동일" if current == prior else f"전일 {_stage(prior)}")
+    if week is not None:
+        bits.append(f"7일전 {_stage(week)}")
+    return f"{arrow} ({', '.join(bits)})"
+
+
 def _spot_lines(view: DayView) -> list[str]:
     lines = ["1. AWS Spot 중단률"]
     for target in SPOT_INSTANCES:
@@ -21,7 +49,12 @@ def _spot_lines(view: DayView) -> list[str]:
             shown = _missing(view.spot_reason)
         else:
             label = view.spot_labels.get(target.column, str(bucket))
-            shown = f"{bucket + 1}단계 ({label})"
+            history = spot_history_suffix(
+                bucket,
+                view.spot_prev.get(target.column),
+                view.spot_week.get(target.column),
+            )
+            shown = f"{_stage(bucket)} ({label}){history}"
         lines.append(f"   - {target.display}: {shown}")
     return lines
 

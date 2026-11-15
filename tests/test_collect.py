@@ -89,7 +89,9 @@ def test_collect_replaces_today_and_keeps_the_backfill_row(tmp_path, monkeypatch
     )
     assert collect(path, today=date(2026, 11, 15)) == 0
     message = capsys.readouterr().out
-    assert "us-east-1 p5 (H100): 1단계 (<5%)" in message
+    assert "   - us-east-1 p5 (H100): 1단계 (<5%)" in message.splitlines()
+    assert "7일전" not in message
+    assert "↑" not in message
     assert "H100: $2.67/hr (Δ +33.3%) / 최저 $1.67" in message
     assert "전일 다운로드: 73,713 (7일 평균 대비 -10.8%)" in message
     assert "데이터 없음 (EIA_API_KEY 없음)" in message
@@ -111,6 +113,47 @@ def test_collect_replaces_today_and_keeps_the_backfill_row(tmp_path, monkeypatch
     assert today["pjm_overnight_mw"] == ""
     assert today["overall"] == "Stable"
     assert today["notes"] == "vast: dod vs backfill; pjm: EIA_API_KEY missing"
+
+
+def test_collect_message_compares_each_spot_with_prior_day_and_week(tmp_path, monkeypatch, capsys):
+    _patch_success(monkeypatch)
+    path = tmp_path / "history.csv"
+    upsert_rows(
+        path,
+        [
+            _blank(
+                "2026-11-08",
+                spot_use1_p5="0",
+                spot_use1_p4d="1",
+                spot_usw2_p5="0",
+                spot_usw2_p4d="2",
+                notes="older",
+            ),
+            _blank(
+                "2026-11-14",
+                spot_use1_p5="0",
+                spot_use1_p4d="2",
+                spot_usw2_p5="1",
+                spot_usw2_p4d="4",
+                vast_h100_median="2",
+                vast_h200_median="3.5",
+                vast_b200_median="8",
+                notes="yesterday",
+            ),
+        ],
+    )
+    assert collect(path, today=date(2026, 11, 15)) == 0
+    message = capsys.readouterr().out
+    assert "   - us-east-1 p5 (H100): 1단계 (<5%) → (전일 동일, 7일전 1단계)" in message
+    assert "   - us-east-1 p4d (A100): 4단계 (15-20%) ↑ (전일 3단계, 7일전 2단계)" in message
+    assert "   - us-west-2 p5 (H100): 1단계 (<5%) ↓ (전일 2단계, 7일전 1단계)" in message
+    assert "   - us-west-2 p4d (A100): 5단계 (>20%) → (전일 동일, 7일전 3단계)" in message
+    # Per-line arrows disagree, but the four-bucket average is unchanged (1.75), so Spot stays 0.
+    assert "종합: Stable" in message
+    rows = read_rows(path)
+    assert [row["date_kst"] for row in rows] == ["2026-11-08", "2026-11-14", "2026-11-15"]
+    assert rows[-1]["spot_use1_p4d"] == "3"
+    assert "spot_week" not in rows[-1]
 
 
 def test_dry_run_prints_and_does_not_touch_the_csv(tmp_path, monkeypatch, capsys):

@@ -1,7 +1,7 @@
 from dataclasses import replace
 
 from ai_demand.config import SHEET_URL
-from ai_demand.message import render
+from ai_demand.message import render, spot_history_suffix
 from ai_demand.model import DayView, VastQuote
 from ai_demand.score import score_view
 
@@ -70,6 +70,58 @@ def test_message_matches_the_daily_layout_and_does_not_escape_labels():
     assert "<5%" in text
     assert "&lt;" not in text
     assert "**" not in text
+
+
+def test_spot_history_suffix_formats_each_case():
+    assert spot_history_suffix(3, 2, 1) == " ↑ (전일 3단계, 7일전 2단계)"
+    assert spot_history_suffix(3, 3, 1) == " → (전일 동일, 7일전 2단계)"
+    assert spot_history_suffix(0, 1, None) == " ↓ (전일 2단계)"
+    assert spot_history_suffix(4, None, 2) == " (7일전 3단계)"
+    assert spot_history_suffix(0, None, None) == ""
+
+
+def test_spot_lines_show_prior_day_and_week_ago_stages():
+    view = _snapshot(
+        spot_prev={
+            "spot_use1_p5": 0,
+            "spot_use1_p4d": 2,
+            "spot_usw2_p5": 1,
+            "spot_usw2_p4d": 4,
+        },
+        spot_week={
+            "spot_use1_p5": 0,
+            "spot_use1_p4d": 1,
+            "spot_usw2_p4d": 2,
+        },
+        overall="Stable",
+    )
+    text = render(view)
+    assert "   - us-east-1 p5 (H100): 1단계 (<5%) → (전일 동일, 7일전 1단계)" in text
+    assert "   - us-east-1 p4d (A100): 4단계 (15-20%) ↑ (전일 3단계, 7일전 2단계)" in text
+    assert "   - us-west-2 p5 (H100): 1단계 (<5%) ↓ (전일 2단계)" in text
+    assert "   - us-west-2 p4d (A100): 5단계 (>20%) → (전일 동일, 7일전 3단계)" in text
+
+
+def test_spot_line_without_history_has_no_parenthetical():
+    text = render(_snapshot(overall="Stable"))
+    assert "   - us-east-1 p4d (A100): 4단계 (15-20%)" in text.splitlines()
+    assert "7일전" not in text
+    assert "↑" not in text
+
+
+def test_missing_spot_value_does_not_gain_a_history_suffix():
+    view = _snapshot(
+        spot_values={
+            "spot_use1_p5": 0,
+            "spot_use1_p4d": 3,
+            "spot_usw2_p5": None,
+            "spot_usw2_p4d": 4,
+        },
+        spot_prev={"spot_usw2_p5": 2},
+        spot_week={"spot_usw2_p5": 1},
+        overall="Stable",
+    )
+    assert "   - us-west-2 p5 (H100): 데이터 없음 (응답에 없음)" in render(view).splitlines()
 
 
 def test_missing_previous_median_and_missing_minimum_keep_the_line_readable():

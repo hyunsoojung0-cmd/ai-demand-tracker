@@ -1,6 +1,6 @@
 """In-memory shape of one collection day. Parsing, scoring, CSV, and the message share it."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -31,4 +31,8 @@ class DayView:
     pjm_prev: float | None
     pjm_ma: float | None
     pjm_reason: str
+    # Raw r for the previous CSV row and for the nearest row on or before
+    # date-7. A missing key or None means that comparison is skipped.
+    spot_prev: dict[str, int | None] = field(default_factory=dict)
+    spot_week: dict[str, int | None] = field(default_factory=dict)
     overall: str = ""
