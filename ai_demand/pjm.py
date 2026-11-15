@@ -11,6 +11,7 @@ the complete night before it.
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from urllib.parse import urlencode
@@ -162,13 +163,14 @@ def _eia_url(api_key: str) -> str:
     return EIA_URL + "?" + urlencode(params, safe="[]")
 
 
-# Workflow run 43716184862 asked for the whole backfill in one length=5000
-# call. EIA answered with HTTP 5xx and then a read timeout, so every PJM cell
-# stayed blank. The daily job only requests 240 hours and succeeds with the
-# same key. History is therefore taken in two-week windows, each small enough
-# to return, and paged with offset only if a window comes back full.
-EIA_HISTORY_CHUNK_DAYS = 14
-EIA_PAGE_LENGTH = 1000
+# The daily job asks for 240 recent hours and returns. A six-month call and
+# even a 14-day call (runs 43716184862 and 43720072000) read-timeout. History
+# therefore uses the same query shape as the daily job, over windows of at
+# most a week. A window that still fails is skipped; earlier windows are kept.
+EIA_HISTORY_CHUNK_DAYS = 7
+EIA_HISTORY_TIMEOUT = (10, 90)
+EIA_HISTORY_ATTEMPTS = 3
+EIA_WINDOW_PAUSE_SECONDS = 1.0
 
 
 def _raw_rows(payload: dict) -> tuple[list, int | None]:
@@ -187,6 +189,7 @@ def _raw_rows(payload: dict) -> tuple[list, int | None]:
 
 
 def _eia_history_url(api_key: str, start: str, end: str, offset: int, length: int) -> str:
+    """Same facets, frequency, data column, sort, and length as the daily job."""
     params = [
         ("api_key", api_key),
         ("frequency", "hourly"),
@@ -196,10 +199,11 @@ def _eia_history_url(api_key: str, start: str, end: str, offset: int, length: in
         ("start", start),
         ("end", end),
         ("sort[0][column]", "period"),
-        ("sort[0][direction]", "asc"),
-        ("offset", str(offset)),
+        ("sort[0][direction]", "desc"),
         ("length", str(length)),
     ]
+    if offset:
+        params.append(("offset", str(offset)))
     return EIA_URL + "?" + urlencode(params, safe="[]")
 
 
@@ -207,22 +211,18 @@ def _format_hour(moment: datetime) -> str:
     return moment.strftime("%Y-%m-%dT%H")
 
 
-def _fetch_eia_window(
+def _fetch_eia_window_once(
     api_key: str,
     start: datetime,
     end: datetime,
     page_length: int,
 ) -> list[tuple[datetime, float]]:
-    """One short hourly window, paged if EIA fills ``page_length``."""
+    """One weekly window. Pages with offset only when EIA fills ``page_length``."""
     points: list[tuple[datetime, float]] = []
     offset = 0
     while True:
         url = _eia_history_url(api_key, _format_hour(start), _format_hour(end), offset, page_length)
-        try:
-            payload = get_json(url)
-        except Exception as exc:
-            log.warning("pjm history request failed: %s", type(exc).__name__)
-            raise SourceError("request_failed") from None
+        payload = get_json(url, retries=1, timeout=EIA_HISTORY_TIMEOUT)
         raw, total = _raw_rows(payload)
         points.extend(iter_demand_points(payload))
         offset += len(raw)
@@ -233,13 +233,47 @@ def _fetch_eia_window(
     return points
 
 
-def fetch_pjm_history(start: date, end: date, page_length: int = EIA_PAGE_LENGTH) -> list[tuple[datetime, float]]:
+def _fetch_eia_window(
+    api_key: str,
+    start: datetime,
+    end: datetime,
+    page_length: int,
+) -> list[tuple[datetime, float]]:
+    """Retry one window with exponential backoff. The caller keeps other windows."""
+    delay = 2.0
+    last: Exception | None = None
+    for attempt in range(1, EIA_HISTORY_ATTEMPTS + 1):
+        try:
+            return _fetch_eia_window_once(api_key, start, end, page_length)
+        except Exception as exc:
+            last = exc
+            log.warning(
+                "pjm window %s..%s attempt %s/%s failed: %s",
+                _format_hour(start),
+                _format_hour(end),
+                attempt,
+                EIA_HISTORY_ATTEMPTS,
+                type(exc).__name__,
+            )
+            if attempt < EIA_HISTORY_ATTEMPTS:
+                time.sleep(delay)
+                delay *= 2
+    assert last is not None
+    raise last
+
+
+def fetch_pjm_history(
+    start: date,
+    end: date,
+    page_length: int = PJM_HOURLY_LENGTH,
+    chunk_days: int = EIA_HISTORY_CHUNK_DAYS,
+) -> list[tuple[datetime, float]]:
     """Hourly PJM demand from six nights before ``start`` through ``end``.
 
-    The window is split into ``EIA_HISTORY_CHUNK_DAYS``-long requests. Each
-    ``start``/``end`` uses the hourly form ``YYYY-MM-DDTHH``. The extra six
-    nights let the first rows of a backfill form a 7-night average when those
-    hours exist.
+    Each request uses the daily job's length, sort, facets, and frequency,
+    bounded by ``YYYY-MM-DDTHH``. A window that fails after retries is logged
+    and skipped. The extra six nights let the first backfill rows form a
+    7-night average when those hours exist.
     """
     key = os.environ.get("EIA_API_KEY", "").strip()
     if not key:
@@ -247,12 +281,23 @@ def fetch_pjm_history(start: date, end: date, page_length: int = EIA_PAGE_LENGTH
     cursor = datetime(start.year, start.month, start.day) - timedelta(days=6)
     last = datetime(end.year, end.month, end.day) + timedelta(days=1, hours=12)
     points: list[tuple[datetime, float]] = []
+    skipped = 0
+    first = True
     while cursor <= last:
-        chunk_end = min(last, cursor + timedelta(days=EIA_HISTORY_CHUNK_DAYS) - timedelta(hours=1))
-        points.extend(_fetch_eia_window(key, cursor, chunk_end, page_length))
+        if not first and EIA_WINDOW_PAUSE_SECONDS:
+            time.sleep(EIA_WINDOW_PAUSE_SECONDS)
+        first = False
+        chunk_end = min(last, cursor + timedelta(days=chunk_days) - timedelta(hours=1))
+        try:
+            points.extend(_fetch_eia_window(key, cursor, chunk_end, page_length))
+        except Exception:
+            skipped += 1
+            log.warning("pjm window %s..%s skipped", _format_hour(cursor), _format_hour(chunk_end))
         cursor = chunk_end + timedelta(hours=1)
+    if skipped:
+        log.warning("pjm history skipped %s window(s)", skipped)
     if not points:
-        raise SourceError("not_in_response")
+        raise SourceError("request_failed")
     return points
 
 
