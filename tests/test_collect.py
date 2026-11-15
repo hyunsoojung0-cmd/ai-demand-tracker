@@ -1,4 +1,5 @@
 from datetime import date
+from pathlib import Path
 
 from ai_demand.collect import build_notes, collect, main
 from ai_demand.config import HISTORY_COLUMNS
@@ -18,6 +19,7 @@ def _blank(day, **overrides):
 
 
 def _patch_success(monkeypatch):
+    monkeypatch.setattr("ai_demand.collect.BACKFILL_6M_CSV", Path("/tmp/ai-demand-no-backfill.csv"))
     monkeypatch.setattr(
         "ai_demand.collect.fetch_spot",
         lambda: SpotReading(

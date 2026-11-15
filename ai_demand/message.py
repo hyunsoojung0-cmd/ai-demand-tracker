@@ -1,8 +1,9 @@
 """Korean Telegram summary. Plain text, so labels such as ``<5%`` need no escaping."""
 
-from ai_demand.config import HF_BASKET, SHEET_URL, SPOT_INSTANCES, VAST_DISPLAY
+from ai_demand.commentary import build_commentary, fit_telegram
+from ai_demand.config import HF_BASKET, SHEET_URL, SPOT_COLUMNS, SPOT_INSTANCES, VAST_DISPLAY
 from ai_demand.model import DayView, VastQuote
-from ai_demand.score import pct_change
+from ai_demand.score import Score, pct_change, score_view
 
 
 def _missing(reason: str) -> str:
@@ -186,7 +187,19 @@ def _huggingface_lines(view: DayView) -> list[str]:
     return lines
 
 
-def render(view: DayView) -> str:
+def _score_for(view: DayView, score: Score | None) -> Score:
+    if score is not None:
+        return score
+    previous = [view.spot_prev[column] for column in SPOT_COLUMNS if view.spot_prev.get(column) is not None]
+    return score_view(view, previous or None)
+
+
+def render(
+    view: DayView,
+    score: Score | None = None,
+    history: dict | None = None,
+    notes: str = "",
+) -> str:
     lines = [f"📊 [AI Demand Daily] {view.date_kst}"]
     lines.extend(_spot_lines(view))
     lines.extend(_vast_lines(view))
@@ -195,7 +208,8 @@ def render(view: DayView) -> str:
     lines.extend(_openrouter_lines(view))
     lines.extend(_huggingface_lines(view))
     lines.append(f"종합: {view.overall}")
+    lines.extend(build_commentary(view, _score_for(view, score), history, notes))
     lines.append(f"📈 시트: {SHEET_URL}")
     lines.append("Data: Vast.ai")
     lines.append("Source: OpenRouter (CC BY 4.0)")
-    return "\n".join(lines)
+    return fit_telegram(lines)
