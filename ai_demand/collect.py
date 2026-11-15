@@ -345,6 +345,23 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
     return 0 if any_ok else 1
 
 
+def already_collected(path: Path, date_kst: str) -> bool:
+    """True when ``path`` already has a row for this KST date.
+
+    A missing or unreadable file is not treated as collected. The fallback run
+    then collects, instead of skipping a day it cannot verify.
+    """
+    target = date_kst.strip()
+    if not target:
+        return False
+    try:
+        rows = read_rows(path)
+    except Exception as exc:
+        log.warning("csv read failed while checking %s: %s", target, type(exc).__name__)
+        return False
+    return any((row.get("date_kst") or "").strip() == target for row in rows)
+
+
 def _parse_date(text: str) -> date:
     try:
         return date.fromisoformat(text)
@@ -355,6 +372,11 @@ def _parse_date(text: str) -> date:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Collect daily AI-infrastructure demand indicators.")
     parser.add_argument("--dry-run", action="store_true", help="Print the message. Do not write the CSV or send Telegram.")
+    parser.add_argument(
+        "--fallback",
+        action="store_true",
+        help="Skip collection and Telegram when the KST date is already in the CSV.",
+    )
     parser.add_argument("--backfill", action="store_true", help="Seed 2026-11-02..2026-11-14 and exit.")
     parser.add_argument("--date", type=_parse_date, default=None, help="Override the KST row date (YYYY-MM-DD).")
     parser.add_argument("--csv", type=Path, default=DEFAULT_CSV, help="Path to history.csv.")
@@ -362,4 +384,8 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.backfill:
         return backfill(args.csv)
-    return collect(path=args.csv, dry_run=args.dry_run, today=args.date)
+    today = args.date or kst_today()
+    if args.fallback and already_collected(args.csv, today.isoformat()):
+        log.info("already collected, skipping")
+        return 0
+    return collect(path=args.csv, dry_run=args.dry_run, today=today)
