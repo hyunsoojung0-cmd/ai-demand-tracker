@@ -17,6 +17,8 @@ from zoneinfo import ZoneInfo
 from ai_demand.backfill import backfill
 from ai_demand.config import SPOT_COLUMNS, SPOT_INSTANCES, VAST_DISPLAY
 from ai_demand.errors import SourceError
+from ai_demand.huggingface import fetch_huggingface, implied_download, implied_moving_average
+from ai_demand.openrouter import fetch_openrouter
 from ai_demand.history import (
     DEFAULT_CSV,
     parse_optional_float,
@@ -49,9 +51,11 @@ def failure_reason_ko(exc: Exception | None) -> str:
     if isinstance(exc, SourceError):
         return {
             "missing_key": "EIA_API_KEY 없음",
+            "missing_openrouter_key": "OPENROUTER_API_KEY 없음",
             "request_failed": "요청 실패",
             "not_in_response": "응답에 없음",
             "incomplete": "완전한 야간 구간 없음",
+            "no_complete_day": "완전한 일자 없음",
         }.get(exc.code, "요청 실패")
     if exc is None:
         return "응답에 없음"
@@ -62,9 +66,11 @@ def failure_note(source: str, exc: Exception) -> str:
     if isinstance(exc, SourceError):
         detail = {
             "missing_key": "EIA_API_KEY missing",
+            "missing_openrouter_key": "OPENROUTER_API_KEY missing",
             "request_failed": "request failed",
             "not_in_response": "not in response",
             "incomplete": "no complete night",
+            "no_complete_day": "no complete day",
         }.get(exc.code, "request failed")
         return f"{source}: {detail}"
     return f"{source}: request failed"
@@ -83,6 +89,9 @@ def build_notes(
     pjm_failure: str | None = None,
     pjm_latest_incomplete: bool = False,
     pjm_prior_gap: bool = False,
+    openrouter_failure: str | None = None,
+    hf_failure: str | None = None,
+    hf_partial: str | None = None,
 ) -> str:
     """Stable, semicolon-separated notes. Routine success leaves this empty."""
     notes: list[str] = []
@@ -111,6 +120,12 @@ def build_notes(
             notes.append("pjm: latest night incomplete")
         if pjm_prior_gap:
             notes.append("pjm: prior gap")
+    if openrouter_failure:
+        notes.append(openrouter_failure)
+    if hf_failure:
+        notes.append(hf_failure)
+    elif hf_partial:
+        notes.append(hf_partial)
     return "; ".join(notes)
 
 
@@ -120,6 +135,18 @@ def _capture(name: str, func):
     except Exception as exc:
         log.warning("%s unavailable: %s", name, failure_note(name, exc))
         return None, exc
+
+
+def _implied_history(rows: list[dict[str, str]], today_text: str) -> dict[date, int]:
+    found: dict[date, int] = {}
+    for row in rows:
+        if row.get("date_kst", "") >= today_text:
+            continue
+        raw = (row.get("hf_implied_daily") or "").strip()
+        if not raw:
+            continue
+        found[date.fromisoformat(row["date_kst"])] = int(raw)
+    return found
 
 
 def _spot_history(row: dict | None) -> dict[str, int | None]:
@@ -217,6 +244,8 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
     vast, vast_exc = _capture("vast", fetch_vast)
     pypi, pypi_exc = _capture("vllm", fetch_pypi)
     pjm, pjm_exc = _capture("pjm", fetch_pjm)
+    openrouter, or_exc = _capture("openrouter", fetch_openrouter)
+    huggingface, hf_exc = _capture("hf", fetch_huggingface)
 
     try:
         rows = read_rows(path)
@@ -227,6 +256,35 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
     week_day = (date.fromisoformat(today_text) - timedelta(days=7)).isoformat()
     week = row_on_or_before(rows, week_day)
     view = _build_view(today_text, previous, week, spot, spot_exc, vast, vast_exc, pypi, pypi_exc, pjm, pjm_exc)
+    today_date = date.fromisoformat(today_text)
+    if openrouter is None:
+        view = replace(view, or_reason=failure_reason_ko(or_exc))
+    else:
+        view = replace(
+            view,
+            or_total=openrouter.total_tokens,
+            or_previous=openrouter.previous_tokens,
+            or_ma=openrouter.ma_7d,
+            or_top5_share=openrouter.top5_share,
+            or_top1=openrouter.top1_model,
+            or_date=openrouter.day,
+        )
+    previous_alltime = None
+    if previous is not None and (previous.get("hf_basket_alltime") or "").strip():
+        previous_alltime = int(previous["hf_basket_alltime"])
+    if huggingface is None:
+        view = replace(view, hf_reason=failure_reason_ko(hf_exc))
+    else:
+        implied = None if huggingface.failed else implied_download(huggingface.alltime, previous_alltime)
+        view = replace(
+            view,
+            hf_30d=huggingface.downloads_30d,
+            hf_alltime=huggingface.alltime,
+            hf_implied=implied,
+            hf_implied_ma=implied_moving_average(_implied_history(rows, today_text), today_date, implied),
+            hf_failed=huggingface.failed,
+            hf_basket_size=huggingface.basket_size,
+        )
     # Spot score uses the same previous row as the ↑/↓ arrow: the average of its r values.
     scored = score_view(view, previous_spots(previous))
     view = replace(view, overall=scored.verdict)
@@ -255,11 +313,18 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
         pjm_failure=None if pjm_exc is None else failure_note("pjm", pjm_exc),
         pjm_latest_incomplete=bool(pjm is not None and pjm.latest_incomplete),
         pjm_prior_gap=bool(pjm is not None and pjm.prior_gap),
+        openrouter_failure=None if or_exc is None else failure_note("openrouter", or_exc),
+        hf_failure=None if hf_exc is None else failure_note("hf", hf_exc),
+        hf_partial=(
+            None
+            if huggingface is None or huggingface.failed == 0
+            else f"hf: {huggingface.failed}/{huggingface.basket_size} models failed"
+        ),
     )
     message = render(view)
     print(message)
 
-    any_ok = any(item is not None for item in (spot, vast, pypi, pjm))
+    any_ok = any(item is not None for item in (spot, vast, pypi, pjm, openrouter, huggingface))
     if dry_run:
         log.info("dry_run: skip csv write and telegram")
         return 0 if any_ok else 1

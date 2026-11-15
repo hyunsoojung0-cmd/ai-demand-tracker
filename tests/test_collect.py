@@ -56,6 +56,15 @@ def _patch_success(monkeypatch):
 
     monkeypatch.setattr("ai_demand.collect.fetch_pjm", _pjm)
 
+    def _openrouter():
+        raise SourceError("missing_openrouter_key")
+
+    def _huggingface():
+        raise SourceError("request_failed")
+
+    monkeypatch.setattr("ai_demand.collect.fetch_openrouter", _openrouter)
+    monkeypatch.setattr("ai_demand.collect.fetch_huggingface", _huggingface)
+
 
 def test_notes_keep_a_stable_source_order():
     assert build_notes(
@@ -96,7 +105,9 @@ def test_collect_replaces_today_and_keeps_the_backfill_row(tmp_path, monkeypatch
     assert "전일 다운로드: 73,713 (7일 평균 대비 -10.8%)" in message
     assert "데이터 없음 (EIA_API_KEY 없음)" in message
     assert "종합: Stable" in message
-    assert message.strip().endswith("Data: Vast.ai")
+    assert "Data: Vast.ai" in message
+    assert message.strip().endswith("Source: OpenRouter (CC BY 4.0)")
+    assert "데이터 없음 (OPENROUTER_API_KEY 없음)" in message
 
     assert collect(path, today=date(2026, 11, 15)) == 0
     rows = read_rows(path)
@@ -112,7 +123,12 @@ def test_collect_replaces_today_and_keeps_the_backfill_row(tmp_path, monkeypatch
     assert today["vllm_7d_ma"] == "82601.29"
     assert today["pjm_overnight_mw"] == ""
     assert today["overall"] == "Stable"
-    assert today["notes"] == "vast: dod vs backfill; pjm: EIA_API_KEY missing"
+    assert today["notes"] == (
+        "vast: dod vs backfill; pjm: EIA_API_KEY missing; "
+        "openrouter: OPENROUTER_API_KEY missing; hf: request failed"
+    )
+    assert today["or_total_tokens"] == ""
+    assert today["hf_basket_alltime"] == ""
 
 
 def test_collect_message_compares_each_spot_with_prior_day_and_week(tmp_path, monkeypatch, capsys):
@@ -179,12 +195,15 @@ def test_all_sources_failing_exits_nonzero(tmp_path, monkeypatch, capsys):
     def boom():
         raise SourceError("request_failed")
 
-    for name in ("fetch_spot", "fetch_vast", "fetch_pypi", "fetch_pjm"):
+    for name in ("fetch_spot", "fetch_vast", "fetch_pypi", "fetch_pjm", "fetch_openrouter", "fetch_huggingface"):
         monkeypatch.setattr(f"ai_demand.collect.{name}", boom)
     path = tmp_path / "history.csv"
     assert collect(path, today=date(2026, 11, 15)) == 1
     row = read_rows(path)[0]
     assert row["overall"] == "Stable"
     assert row["spot_use1_p5"] == ""
-    assert row["notes"] == "spot: request failed; vast: request failed; vllm: request failed; pjm: request failed"
+    assert row["notes"] == (
+        "spot: request failed; vast: request failed; vllm: request failed; "
+        "pjm: request failed; openrouter: request failed; hf: request failed"
+    )
     assert "데이터 없음 (요청 실패)" in capsys.readouterr().out

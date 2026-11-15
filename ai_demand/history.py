@@ -44,7 +44,11 @@ def read_rows(path: Path) -> list[dict[str, str]]:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
             return []
-        if list(reader.fieldnames) != list(HISTORY_COLUMNS):
+        got = list(reader.fieldnames)
+        expected = list(HISTORY_COLUMNS)
+        # Older files end before the appended OpenRouter and Hugging Face columns.
+        prefix = len(got) < len(expected) and expected[: len(got)] == got
+        if got != expected and not prefix:
             raise ValueError(f"unexpected CSV header: {reader.fieldnames}")
         return [{column: (row.get(column) or "") for column in HISTORY_COLUMNS} for row in reader]
 
@@ -136,6 +140,12 @@ def row_from_view(view: DayView, notes: str) -> dict[str, str]:
     row["pjm_overnight_7d_ma"] = format_number(view.pjm_ma, AVERAGE_DECIMALS)
     row["overall"] = view.overall
     row["notes"] = notes
+    row["or_total_tokens"] = format_int(view.or_total)
+    row["or_top5_share"] = format_number(view.or_top5_share, PRICE_DECIMALS)
+    row["or_top1_model"] = view.or_top1 or ""
+    row["hf_basket_30d"] = format_int(view.hf_30d)
+    row["hf_basket_alltime"] = format_int(view.hf_alltime)
+    row["hf_implied_daily"] = format_int(view.hf_implied)
     return row
 
 
@@ -145,6 +155,8 @@ def assert_header_contract() -> None:
         "date_kst,spot_use1_p5,spot_use1_p4d,spot_usw2_p5,spot_usw2_p4d,"
         "vast_h100_min,vast_h100_median,vast_h200_min,vast_h200_median,"
         "vast_b200_min,vast_b200_median,vllm_last_day,vllm_7d_ma,"
-        "pjm_overnight_mw,pjm_overnight_7d_ma,overall,notes"
+        "pjm_overnight_mw,pjm_overnight_7d_ma,overall,notes,"
+        "or_total_tokens,or_top5_share,or_top1_model,"
+        "hf_basket_30d,hf_basket_alltime,hf_implied_daily"
     ):
         raise RuntimeError("history header drifted from the sheet contract")

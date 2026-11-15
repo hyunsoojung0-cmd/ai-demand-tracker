@@ -23,6 +23,14 @@ VLLM_VS_MA_DOWN = -0.05
 PJM_VS_MA_UP = 0.01
 PJM_VS_MA_DOWN = -0.01
 
+# OpenRouter daily total tokens versus the 7-day moving average, as a fraction.
+OR_VS_MA_UP = 0.05
+OR_VS_MA_DOWN = -0.05
+
+# Hugging Face implied daily downloads versus the 7-day moving average.
+HF_VS_MA_UP = 0.10
+HF_VS_MA_DOWN = -0.10
+
 # Sum of the signals that actually had data.
 VERDICT_STRONG_AT = 2
 VERDICT_SOFTENING_AT = -2
@@ -41,6 +49,28 @@ VAST_BUNDLES_URL = "https://console.vast.ai/api/v0/bundles/"
 PYPI_RECENT_URL = "https://pypistats.org/api/packages/vllm/recent"
 PYPI_OVERALL_URL = "https://pypistats.org/api/packages/vllm/overall"
 EIA_URL = "https://api.eia.gov/v2/electricity/rto/region-data/data/"
+OPENROUTER_RANKINGS_URL = "https://openrouter.ai/api/v1/datasets/rankings-daily"
+# Days requested, ending yesterday UTC, so the window covers a 7-day average.
+OPENROUTER_LOOKBACK_DAYS = 10
+HUGGINGFACE_MODEL_URL = "https://huggingface.co/api/models/{repo_id}"
+
+# Official flagship repos. gpt2 is intentionally excluded. Each id was checked
+# against the public model API on 2026-11-15.
+HF_BASKET = (
+    "meta-llama/Llama-3.1-8B-Instruct",
+    "meta-llama/Llama-3.3-70B-Instruct",
+    "Qwen/Qwen2.5-7B-Instruct",
+    "Qwen/Qwen3-14B",
+    "Qwen/Qwen3-0.6B",
+    "deepseek-ai/DeepSeek-V3.2",
+    "deepseek-ai/DeepSeek-R1",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "mistralai/Mistral-7B-Instruct-v0.3",
+    "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+    "google/gemma-3-4b-it",
+    "google/gemma-3-27b-it",
+)
 
 # Latest hourly rows to request: 10 days covers 7 nights plus a lag buffer.
 PJM_HOURLY_LENGTH = 240
@@ -130,6 +160,12 @@ HISTORY_COLUMNS = (
     "pjm_overnight_7d_ma",
     "overall",
     "notes",
+    "or_total_tokens",
+    "or_top5_share",
+    "or_top1_model",
+    "hf_basket_30d",
+    "hf_basket_alltime",
+    "hf_implied_daily",
 )
 
 HISTORY_HEADER = ",".join(HISTORY_COLUMNS)
