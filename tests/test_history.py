@@ -3,6 +3,8 @@ from ai_demand.history import (
     assert_header_contract,
     format_number,
     read_rows,
+    row_on_or_before,
+    spot_bucket,
     upsert_rows,
     write_rows,
 )
@@ -73,6 +75,23 @@ def test_rewriting_the_same_rows_is_byte_stable(tmp_path):
     first = path.read_bytes()
     write_rows(path, read_rows(path))
     assert path.read_bytes() == first
+
+
+def test_week_row_is_the_nearest_on_or_before_and_a_blank_does_not_walk_back():
+    rows = [
+        _blank_row("2026-11-07", spot_use1_p4d="1"),
+        _blank_row("2026-11-08", spot_use1_p4d=""),
+        _blank_row("2026-11-14", spot_use1_p4d="2"),
+        _blank_row("2026-11-15", spot_use1_p4d="3"),
+    ]
+    assert row_on_or_before(rows, "2026-11-08")["date_kst"] == "2026-11-08"
+    assert spot_bucket(row_on_or_before(rows, "2026-11-08"), "spot_use1_p4d") is None
+    without_eighth = [row for row in rows if row["date_kst"] != "2026-11-08"]
+    earlier = row_on_or_before(without_eighth, "2026-11-08")
+    assert earlier["date_kst"] == "2026-11-07"
+    assert spot_bucket(earlier, "spot_use1_p4d") == 1
+    assert row_on_or_before(rows, "2026-11-01") is None
+    assert spot_bucket(None, "spot_use1_p4d") is None
 
 
 def test_bad_header_is_refused(tmp_path):

@@ -10,7 +10,7 @@ import argparse
 import logging
 import os
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -24,6 +24,8 @@ from ai_demand.history import (
     previous_spots,
     read_rows,
     row_from_view,
+    row_on_or_before,
+    spot_bucket,
     upsert_rows,
 )
 from ai_demand.message import render
@@ -120,7 +122,23 @@ def _capture(name: str, func):
         return None, exc
 
 
-def _build_view(today: str, previous: dict | None, spot, spot_exc, vast, vast_exc, pypi, pypi_exc, pjm, pjm_exc) -> DayView:
+def _spot_history(row: dict | None) -> dict[str, int | None]:
+    return {target.column: spot_bucket(row, target.column) for target in SPOT_INSTANCES}
+
+
+def _build_view(
+    today: str,
+    previous: dict | None,
+    week: dict | None,
+    spot,
+    spot_exc,
+    vast,
+    vast_exc,
+    pypi,
+    pypi_exc,
+    pjm,
+    pjm_exc,
+) -> DayView:
     if spot is None:
         spot_values = {target.column: None for target in SPOT_INSTANCES}
         spot_labels: dict[str, str] = {}
@@ -175,6 +193,8 @@ def _build_view(today: str, previous: dict | None, spot, spot_exc, vast, vast_ex
         pjm_prev=pjm_prev,
         pjm_ma=pjm_ma,
         pjm_reason=pjm_reason,
+        spot_prev=_spot_history(previous),
+        spot_week=_spot_history(week),
     )
 
 
@@ -204,7 +224,10 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
         log.error("csv read failed: %s", type(exc).__name__)
         return 1
     previous = previous_row(rows, today_text)
-    view = _build_view(today_text, previous, spot, spot_exc, vast, vast_exc, pypi, pypi_exc, pjm, pjm_exc)
+    week_day = (date.fromisoformat(today_text) - timedelta(days=7)).isoformat()
+    week = row_on_or_before(rows, week_day)
+    view = _build_view(today_text, previous, week, spot, spot_exc, vast, vast_exc, pypi, pypi_exc, pjm, pjm_exc)
+    # Spot score uses the same previous row as the ↑/↓ arrow: the average of its r values.
     scored = score_view(view, previous_spots(previous))
     view = replace(view, overall=scored.verdict)
     log.info(

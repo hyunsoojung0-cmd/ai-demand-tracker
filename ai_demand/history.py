@@ -81,6 +81,27 @@ def previous_row(rows: list[dict[str, str]], date_kst: str) -> dict[str, str] | 
     return max(earlier, key=lambda row: row["date_kst"])
 
 
+def row_on_or_before(rows: list[dict[str, str]], date_kst: str) -> dict[str, str] | None:
+    """Nearest history row whose date is on or before ``date_kst``.
+
+    A blank cell on that row is left blank. Callers skip the comparison
+    instead of walking further back.
+    """
+    candidates = [row for row in rows if row.get("date_kst", "") <= date_kst]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda row: row["date_kst"])
+
+
+def spot_bucket(row: dict[str, str] | None, column: str) -> int | None:
+    if row is None:
+        return None
+    text = (row.get(column) or "").strip()
+    if not text:
+        return None
+    return int(text)
+
+
 def parse_optional_float(raw: str | None) -> float | None:
     text = (raw or "").strip()
     if not text:
