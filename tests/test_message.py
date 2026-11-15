@@ -20,9 +20,14 @@ EXPECTED = """\
    - 전일 다운로드: 73,713 (7일 평균 대비 -10.8%)
 4. PJM 야간 기저부하
    - 데이터 없음 (EIA_API_KEY 없음)
+5. OpenRouter 토큰
+   - 데이터 없음 (요청 실패)
+6. Hugging Face 다운로드
+   - 데이터 없음 (요청 실패)
 종합: Stable
 📈 시트: SHEET
-Data: Vast.ai""".replace("SHEET", SHEET_URL)
+Data: Vast.ai
+Source: OpenRouter (CC BY 4.0)""".replace("SHEET", SHEET_URL)
 
 
 def _snapshot(**overrides) -> DayView:
@@ -122,6 +127,40 @@ def test_missing_spot_value_does_not_gain_a_history_suffix():
         overall="Stable",
     )
     assert "   - us-west-2 p5 (H100): 데이터 없음 (응답에 없음)" in render(view).splitlines()
+
+
+def test_openrouter_and_huggingface_lines():
+    from datetime import date
+
+    view = _snapshot(
+        or_total=1_234_500_000_000,
+        or_previous=1_209_109_696_376,
+        or_ma=1_187_019_230_769,
+        or_top5_share=0.624,
+        or_top1="anthropic/claude-sonnet",
+        or_date=date(2026, 11, 14),
+        hf_30d=68_500_000,
+        hf_alltime=2_000_000_000,
+        hf_implied=2_345_678,
+        hf_implied_ma=2_345_678 / 1.032,
+        hf_basket_size=13,
+        overall="Stable",
+    )
+    text = render(view)
+    assert "   - 전체 토큰(11/14 UTC): 1,234.5B (전일 대비 +2.1%, 7일 평균 대비 +4.0%)" in text
+    assert "   - 1위 모델: anthropic/claude-sonnet (상위 5개 비중 62%)" in text
+    assert "   - 대표 모델 13개 일일 다운로드: 2,345,678 (7일 평균 대비 +3.2%)" in text
+    assert "   - 30일 누적: 68.5M" in text
+    assert text.endswith("Source: OpenRouter (CC BY 4.0)")
+
+
+def test_huggingface_first_day_and_partial_basket():
+    baseline = _snapshot(hf_30d=68_500_000, hf_alltime=100, hf_basket_size=13, overall="Stable")
+    assert "   - 누적 기준값 저장 (내일부터 일일치 표시)" in render(baseline)
+    partial = _snapshot(hf_30d=12_300_000, hf_failed=2, hf_basket_size=13, overall="Stable")
+    text = render(partial)
+    assert "   - 데이터 없음 (일부 모델 실패)" in text
+    assert "   - 30일 누적: 12.3M (11/13개 합산)" in text
 
 
 def test_missing_previous_median_and_missing_minimum_keep_the_line_readable():

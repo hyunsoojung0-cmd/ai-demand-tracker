@@ -1,6 +1,6 @@
 # AI 인프라 수요 일일 트래커
 
-매일 아침 네 가지 공개 지표를 모아 `data/history.csv`에 한 줄을 추가하고, 같은 내용의 짧은 요약을 텔레그램으로 보냅니다. 시트 반영은 이 저장소가 하지 않습니다. 다른 작업이 아침마다 CSV의 최신 행을 구글 시트에 복사합니다.
+매일 아침 여섯 가지 공개 지표를 모아 `data/history.csv`에 한 줄을 추가하고, 같은 내용의 짧은 요약을 텔레그램으로 보냅니다. 시트 반영은 이 저장소가 하지 않습니다. 다른 작업이 아침마다 CSV의 최신 행을 구글 시트에 복사합니다.
 
 시트: https://docs.google.com/spreadsheets/d/1YV2uuLIqz7WhhuznL0yOGSBVkljz0M46WCt2vk7Wj5A/edit
 
@@ -19,6 +19,8 @@ GitHub Actions `AI 수요 일일 수집`이 매일 07:45 KST에 돕니다. 크�
 | `BOT_TOKEN` | 메시지를 보내지 않고 워크플로 로그에만 출력 |
 | `CHAT_ID` | 위와 같음. 둘 중 하나만 없어도 전송하지 않음 |
 | `EIA_API_KEY` | PJM만 `데이터 없음`으로 남고 나머지 수집은 계속됨. 키는 [EIA Open Data](https://www.eia.gov/opendata/register.php)에서 발급 |
+| `OPENROUTER_API_KEY` | OpenRouter 토큰 사용량만 `데이터 없음 (OPENROUTER_API_KEY 없음)`. 추론에 쓰는 키와 같습니다 |
+| `HF_TOKEN` | 없어도 Hugging Face 공개 API로 수집합니다. 있으면 `Authorization` 헤더로만 보냅니다 |
 
 워크플로 잡에는 `contents: write`가 있어서, 드라이런이 아닐 때 `data/history.csv`를 `ai-demand-bot` 이름으로 `main`에 커밋합니다. 커밋 메시지에는 `[skip ci]`가 들어 있습니다. push 전에 `git pull --rebase origin main`을 합니다. `main`이 액션의 push를 막도록 보호되어 있으면 커밋 단계가 실패합니다.
 
@@ -42,13 +44,13 @@ pip install -r requirements.txt
 python -m ai_demand --dry-run
 ```
 
-시크릿 없이 드라이런이 아닌 실행을 하면 메시지는 표준 출력으로 나오고, CSV는 기록되며, PJM은 `EIA_API_KEY`가 없어 비어 있습니다. 종료 코드는 0입니다.
+시크릿 없이 드라이런이 아닌 실행을 하면 메시지는 표준 출력으로 나오고, CSV는 기록되며, PJM과 OpenRouter는 키가 없어 비어 있습니다. Hugging Face는 키 없이 수집됩니다. 종료 코드는 0입니다.
 
 ```bash
 python -m ai_demand
 ```
 
-한 출처가 실패해도 나머지는 기록합니다. 네 출처가 모두 실패하거나 CSV를 쓰지 못할 때만 종료 코드가 1입니다. 텔레그램 전송 실패는 경고만 남기고 수집 자체는 성공으로 봅니다.
+한 출처가 실패해도 나머지는 기록합니다. 여섯 출처가 모두 실패하거나 CSV를 쓰지 못할 때만 종료 코드가 1입니다. 텔레그램 전송 실패는 경고만 남기고 수집 자체는 성공으로 봅니다.
 
 ## 지표
 
@@ -98,6 +100,24 @@ EIA v2 `electricity/rto/region-data`, `respondent=PJM`, `type=D`, `frequency=hou
 
 키가 없거나 호출이 실패하거나 완전한 밤이 없으면 PJM 칸만 비우고 수집은 계속합니다.
 
+### 5. OpenRouter 토큰
+
+<https://openrouter.ai/api/v1/datasets/rankings-daily>
+
+`Authorization: Bearer`에 `OPENROUTER_API_KEY`를 넣습니다. 키가 없으면 이 항목만 비웁니다. UTC 하루는 상위 50개 모델과 `other` 한 줄로 오고, `total_tokens`는 문자열입니다. 오늘(UTC)은 아직 끝나지 않았으므로 그보다 이전인 마지막 완성일을 씁니다. 전일 대비와 7일 평균은 같은 응답의 최근 약 10일에서 계산하고 CSV에 의존하지 않습니다.
+
+`or_total_tokens`는 `other`를 포함한 합계입니다. `or_top5_share`는 상위 5개 모델 토큰을 그날 합계로 나눈 비율(0–1)입니다. `or_top1_model`은 `other`를 뺀 1위 슬러그입니다. 메시지에는 합계를 십억(B) 단위로 보여주고 데이터 날짜를 `11/14 UTC`처럼 적습니다.
+
+Source: OpenRouter (CC BY 4.0)
+
+데이터셋은 CC BY 4.0입니다. 재사용할 때는 OpenRouter를 출처로 밝혀야 합니다. 문서: <https://openrouter.ai/docs/api/api-reference/datasets/daily-token-totals-for-top-50-models>. 순위 원본은 <https://openrouter.ai/rankings>입니다.
+
+### 6. Hugging Face 오픈 모델 다운로드
+
+고정된 공식 플래그십 13개입니다. `gpt2`는 넣지 않습니다. 목록은 `ai_demand/config.py`의 `HF_BASKET`입니다. 모델마다 `https://huggingface.co/api/models/{id}?expand[]=downloads&expand[]=downloadsAllTime`를 호출합니다. `downloads`는 최근 30일, `downloadsAllTime`은 누적입니다. `HF_TOKEN`이 있으면 그 헤더만 추가합니다.
+
+`hf_basket_30d`와 `hf_basket_alltime`은 바스켓 합입니다. 일일 다운로드는 오늘 누적에서 직전 CSV 행의 `hf_basket_alltime`을 뺀 값이고, 처음에는 비웁니다. 그날 메시지는 `누적 기준값 저장 (내일부터 일일치 표시)`입니다. 일부 모델이 실패하면 30일 합은 성공한 모델만 더하고 notes에 남기며, 누적 합 `hf_basket_alltime`은 비워서 일일 시계열이 부분 합과 섞이지 않게 합니다. 전부 실패하면 이 항목만 비웁니다.
+
 ## 종합 판정
 
 데이터가 있는 신호만 더합니다. 결측 신호는 합계에 포함하지 않습니다.
@@ -109,8 +129,10 @@ EIA v2 `electricity/rto/region-data`, `respondent=PJM`, `type=D`, `frequency=hou
 | Vast H200 median 전일 대비 | > +3% | < −3% |
 | vLLM `last_day` 대 7일 평균 | > +5% | < −5% |
 | PJM 야간 평균 대 7밤 평균 | > +1% | < −1% |
+| OpenRouter 전체 토큰 대 7일 평균 | > +5% | < −5% |
+| HF 바스켓 일일 다운로드 대 7일 평균 | > +10% | < −10% |
 
-B200은 메시지와 CSV에만 나오고 점수에는 넣지 않습니다. 경계값(정확히 +3%, +5%, +1%)은 0점입니다.
+B200은 메시지와 CSV에만 나오고 점수에는 넣지 않습니다. 경계값(정확히 +3%, +5%, +1%, +10%)은 0점입니다.
 
 Spot은 신호 하나입니다. 위 두 조건이 동시에 서로 다른 방향이면 상쇄되어 0이고, 같은 방향이 겹쳐도 +1 또는 -1을 넘지 않습니다. 전일 Spot 값이 없으면(백필 행) 수준만 봅니다. 평균이 1과 3 사이이고 방향이 없으면 0입니다. H100은 한가하고 A100은 빡빡한 날처럼 네 값이 갈리면 평균이 가운데로 모여 0이 될 수 있습니다.
 
@@ -121,10 +143,10 @@ Spot은 신호 하나입니다. 위 두 조건이 동시에 서로 다른 방향
 `data/history.csv` 헤더는 아래 순서를 유지합니다. 빈 칸은 결측입니다. 같은 `date_kst`가 있으면 그 행을 교체합니다.
 
 ```
-date_kst,spot_use1_p5,spot_use1_p4d,spot_usw2_p5,spot_usw2_p4d,vast_h100_min,vast_h100_median,vast_h200_min,vast_h200_median,vast_b200_min,vast_b200_median,vllm_last_day,vllm_7d_ma,pjm_overnight_mw,pjm_overnight_7d_ma,overall,notes
+date_kst,spot_use1_p5,spot_use1_p4d,spot_usw2_p5,spot_usw2_p4d,vast_h100_min,vast_h100_median,vast_h200_min,vast_h200_median,vast_b200_min,vast_b200_median,vllm_last_day,vllm_7d_ma,pjm_overnight_mw,pjm_overnight_7d_ma,overall,notes,or_total_tokens,or_top5_share,or_top1_model,hf_basket_30d,hf_basket_alltime,hf_implied_daily
 ```
 
-`date_kst`는 수집 시점의 한국 날짜입니다. 가격은 소수점 넷째 자리, 평균은 둘째 자리까지 반올림한 뒤 끝의 0을 뺍니다. `notes`는 세미콜론으로 이은 짧은 오류·정보입니다. 정상이면 비어 있습니다.
+`date_kst`는 수집 시점의 한국 날짜입니다. 가격과 `or_top5_share`는 소수점 넷째 자리, 평균은 둘째 자리까지 반올림한 뒤 끝의 0을 뺍니다. `notes`는 세미콜론으로 이은 짧은 오류·정보입니다. 정상이면 비어 있습니다. OpenRouter와 Hugging Face 열은 헤더 끝에만 붙습니다. 예전 행은 그 칸이 비어 있습니다.
 
 `2026-11-02`부터 `2026-11-14`는 백필입니다. Vast `daily[]` median과 pypistats `without_mirrors`의 그날 다운로드·7일 평균만 채우고 나머지 칸은 비웁니다. notes는 `backfill`입니다.
 

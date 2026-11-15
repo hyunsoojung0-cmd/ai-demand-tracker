@@ -11,13 +11,19 @@ two directions cancel when both fire, and the result is clamped to +1, 0, or
 
 Vast contributes two signals (H100 and H200 medians). B200 is not scored.
 vLLM compares last_day with the 7-day average. PJM compares the overnight
-mean with the 7-night average. Boundaries are strict: a change equal to the
+mean with the 7-night average. OpenRouter compares the completed day's total
+tokens with its 7-day average. Hugging Face compares the implied daily basket
+downloads with their 7-day average. Boundaries are strict: a change equal to the
 threshold scores 0.
 """
 
 from dataclasses import dataclass
 
 from ai_demand.config import (
+    HF_VS_MA_DOWN,
+    HF_VS_MA_UP,
+    OR_VS_MA_DOWN,
+    OR_VS_MA_UP,
     PJM_VS_MA_DOWN,
     PJM_VS_MA_UP,
     SPOT_COLUMNS,
@@ -119,5 +125,11 @@ def score_view(view: DayView, previous_spots: list[int] | None) -> Score:
     pjm = band_signal(view.pjm_mw, view.pjm_ma, PJM_VS_MA_UP, PJM_VS_MA_DOWN)
     if pjm is not None:
         parts.append(Signal("pjm", pjm))
+    openrouter = band_signal(view.or_total, view.or_ma, OR_VS_MA_UP, OR_VS_MA_DOWN)
+    if openrouter is not None:
+        parts.append(Signal("openrouter", openrouter))
+    huggingface = band_signal(view.hf_implied, view.hf_implied_ma, HF_VS_MA_UP, HF_VS_MA_DOWN)
+    if huggingface is not None:
+        parts.append(Signal("hf", huggingface))
     total = sum(part.value for part in parts)
     return Score(total=total, verdict=verdict_name(total), signals=tuple(parts))

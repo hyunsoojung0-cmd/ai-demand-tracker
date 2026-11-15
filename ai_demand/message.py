@@ -1,6 +1,6 @@
 """Korean Telegram summary. Plain text, so labels such as ``<5%`` need no escaping."""
 
-from ai_demand.config import SHEET_URL, SPOT_INSTANCES, VAST_DISPLAY
+from ai_demand.config import HF_BASKET, SHEET_URL, SPOT_INSTANCES, VAST_DISPLAY
 from ai_demand.model import DayView, VastQuote
 from ai_demand.score import pct_change
 
@@ -120,13 +120,82 @@ def _pjm_lines(view: DayView) -> list[str]:
     return lines
 
 
+def _billions(tokens: int) -> str:
+    return f"{tokens / 1_000_000_000:,.1f}B"
+
+
+def _compact_count(value: int) -> str:
+    magnitude = abs(value)
+    if magnitude >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.1f}B"
+    if magnitude >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    return f"{value:,}"
+
+
+def _comparison_bits(current: float | None, previous: float | None, average: float | None) -> str:
+    parts = []
+    day_over_day = pct_change(current, previous)
+    versus_average = pct_change(current, average)
+    if day_over_day is None:
+        parts.append("전일 대비 데이터 없음")
+    else:
+        parts.append(f"전일 대비 {_pct(day_over_day)}")
+    if versus_average is None:
+        parts.append("7일 평균 대비 데이터 없음")
+    else:
+        parts.append(f"7일 평균 대비 {_pct(versus_average)}")
+    return ", ".join(parts)
+
+
+def _openrouter_lines(view: DayView) -> list[str]:
+    lines = ["5. OpenRouter 토큰"]
+    if view.or_total is None or view.or_date is None:
+        lines.append(f"   - {_missing(view.or_reason)}")
+        return lines
+    label = f"{view.or_date.month}/{view.or_date.day}"
+    lines.append(
+        f"   - 전체 토큰({label} UTC): {_billions(view.or_total)} ({_comparison_bits(view.or_total, view.or_previous, view.or_ma)})"
+    )
+    if view.or_top1 and view.or_top5_share is not None:
+        share = f"{view.or_top5_share * 100:.0f}%"
+        lines.append(f"   - 1위 모델: {view.or_top1} (상위 5개 비중 {share})")
+    return lines
+
+
+def _huggingface_lines(view: DayView) -> list[str]:
+    lines = ["6. Hugging Face 다운로드"]
+    size = view.hf_basket_size or len(HF_BASKET)
+    if view.hf_30d is None and view.hf_alltime is None and view.hf_implied is None:
+        lines.append(f"   - {_missing(view.hf_reason)}")
+        return lines
+    if view.hf_failed:
+        lines.append(f"   - {_missing('일부 모델 실패')}")
+    elif view.hf_implied is None:
+        lines.append("   - 누적 기준값 저장 (내일부터 일일치 표시)")
+    else:
+        change = pct_change(view.hf_implied, view.hf_implied_ma)
+        daily = f"{view.hf_implied:,}"
+        if change is None:
+            lines.append(f"   - 대표 모델 {size}개 일일 다운로드: {daily}")
+        else:
+            lines.append(f"   - 대표 모델 {size}개 일일 다운로드: {daily} (7일 평균 대비 {_pct(change)})")
+    if view.hf_30d is not None:
+        suffix = f" ({size - view.hf_failed}/{size}개 합산)" if view.hf_failed else ""
+        lines.append(f"   - 30일 누적: {_compact_count(view.hf_30d)}{suffix}")
+    return lines
+
+
 def render(view: DayView) -> str:
     lines = [f"📊 [AI Demand Daily] {view.date_kst}"]
     lines.extend(_spot_lines(view))
     lines.extend(_vast_lines(view))
     lines.extend(_vllm_lines(view))
     lines.extend(_pjm_lines(view))
+    lines.extend(_openrouter_lines(view))
+    lines.extend(_huggingface_lines(view))
     lines.append(f"종합: {view.overall}")
     lines.append(f"📈 시트: {SHEET_URL}")
     lines.append("Data: Vast.ai")
+    lines.append("Source: OpenRouter (CC BY 4.0)")
     return "\n".join(lines)

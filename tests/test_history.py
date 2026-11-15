@@ -26,7 +26,9 @@ def test_header_matches_the_sheet_contract():
         "date_kst,spot_use1_p5,spot_use1_p4d,spot_usw2_p5,spot_usw2_p4d,"
         "vast_h100_min,vast_h100_median,vast_h200_min,vast_h200_median,"
         "vast_b200_min,vast_b200_median,vllm_last_day,vllm_7d_ma,"
-        "pjm_overnight_mw,pjm_overnight_7d_ma,overall,notes"
+        "pjm_overnight_mw,pjm_overnight_7d_ma,overall,notes,"
+        "or_total_tokens,or_top5_share,or_top1_model,"
+        "hf_basket_30d,hf_basket_alltime,hf_implied_daily"
     )
 
 
@@ -92,6 +94,24 @@ def test_week_row_is_the_nearest_on_or_before_and_a_blank_does_not_walk_back():
     assert spot_bucket(earlier, "spot_use1_p4d") == 1
     assert row_on_or_before(rows, "2026-11-01") is None
     assert spot_bucket(None, "spot_use1_p4d") is None
+
+
+def test_old_header_is_migrated_with_blank_new_columns(tmp_path):
+    path = tmp_path / "history.csv"
+    old = (
+        "date_kst,spot_use1_p5,spot_use1_p4d,spot_usw2_p5,spot_usw2_p4d,"
+        "vast_h100_min,vast_h100_median,vast_h200_min,vast_h200_median,"
+        "vast_b200_min,vast_b200_median,vllm_last_day,vllm_7d_ma,"
+        "pjm_overnight_mw,pjm_overnight_7d_ma,overall,notes"
+    )
+    path.write_text(old + "\n2026-11-14,,,,,,2,,3.5,,8,10,11,,,Stable,backfill\n", encoding="utf-8")
+    rows = read_rows(path)
+    assert rows[0]["vast_h100_median"] == "2"
+    assert rows[0]["notes"] == "backfill"
+    assert rows[0]["or_total_tokens"] == ""
+    assert rows[0]["hf_implied_daily"] == ""
+    write_rows(path, rows)
+    assert path.read_text(encoding="utf-8").splitlines()[0] == HISTORY_HEADER
 
 
 def test_bad_header_is_refused(tmp_path):

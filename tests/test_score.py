@@ -41,6 +41,10 @@ def test_spot_signal(values, previous, expected):
         (102, 100, 0.01, -0.01, 1),
         (99, 100, 0.01, -0.01, 0),
         (98, 100, 0.01, -0.01, -1),
+        (110, 100, 0.10, -0.10, 0),
+        (111, 100, 0.10, -0.10, 1),
+        (90, 100, 0.10, -0.10, 0),
+        (89, 100, 0.10, -0.10, -1),
         (None, 100, 0.03, -0.03, None),
         (110, 0, 0.03, -0.03, None),
         (110, None, 0.03, -0.03, None),
@@ -138,6 +142,14 @@ def test_neutral_present_signals_stay_stable():
     scored = score_view(view, [2, 2, 2, 2])
     assert [part.value for part in scored.signals] == [0, 0, 0, 0, 0]
     assert scored.verdict == "Stable"
+
+
+def test_openrouter_and_hf_join_the_score_when_present():
+    view = _view(or_total=106, or_ma=100, hf_implied=89, hf_implied_ma=100)
+    scored = score_view(view, [2, 2, 2, 2])
+    signals = {part.name: part.value for part in scored.signals}
+    assert signals["openrouter"] == 1
+    assert signals["hf"] == -1
 
 
 def test_live_shaped_snapshot_is_stable():

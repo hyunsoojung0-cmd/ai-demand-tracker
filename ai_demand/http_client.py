@@ -26,13 +26,20 @@ def _retryable(exc: Exception) -> bool:
     return False
 
 
-def get_json(url: str, params: list | dict | None = None, retries: int = HTTP_RETRIES):
+def get_json(
+    url: str,
+    params: list | dict | None = None,
+    headers: dict | None = None,
+    retries: int = HTTP_RETRIES,
+):
     """Return the parsed JSON body or raise the last error."""
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    request_headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    if headers:
+        request_headers.update(headers)
     last: Exception | None = None
     for attempt in range(1, retries + 1):
         try:
-            response = requests.get(url, params=params, timeout=HTTP_TIMEOUT, headers=headers)
+            response = requests.get(url, params=params, timeout=HTTP_TIMEOUT, headers=request_headers)
             response.raise_for_status()
             return response.json()
         except (requests.RequestException, ValueError) as exc:
