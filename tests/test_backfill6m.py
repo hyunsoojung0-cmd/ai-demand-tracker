@@ -170,9 +170,9 @@ def test_backfill_refuses_the_daily_history_file(tmp_path, monkeypatch):
 def test_pjm_history_paginates_under_the_5000_row_cap(monkeypatch):
     calls = []
 
-    def fake(url, params=None, headers=None):
+    def fake(url, params=None, headers=None, **_kwargs):
         calls.append(url)
-        offset = int(url.split("offset=")[1].split("&")[0])
+        offset = int(url.split("offset=")[1].split("&")[0]) if "offset=" in url else 0
         if offset == 0:
             data = [
                 {"period": "2026-05-15T05", "value": "10", "respondent": "PJM", "type": "D"},
@@ -183,13 +183,15 @@ def test_pjm_history_paginates_under_the_5000_row_cap(monkeypatch):
         return {"response": {"total": "3", "data": data}}
 
     monkeypatch.setenv("EIA_API_KEY", "secret-key")
+    monkeypatch.setattr("ai_demand.pjm.time.sleep", lambda _seconds: None)
     monkeypatch.setattr("ai_demand.pjm.get_json", fake)
-    points = fetch_pjm_history(date(2026, 5, 15), date(2026, 5, 16), page_length=2)
+    points = fetch_pjm_history(date(2026, 5, 15), date(2026, 5, 16), page_length=2, chunk_days=30)
     assert len(points) == 3
     assert len(calls) == 2
     assert "length=2" in calls[0]
-    assert "offset=0" in calls[0]
+    assert "offset=" not in calls[0]
     assert "offset=2" in calls[1]
+    assert "sort[0][direction]=desc" in calls[0]
     assert "start=2026-05-09T00" in calls[0]
     assert "end=2026-05-17T12" in calls[0]
     assert "data[0]=value" in calls[0]
@@ -204,17 +206,17 @@ def test_six_month_pjm_history_is_chunked_and_parses_a_realistic_night(monkeypat
 
     calls = []
 
-    def fake(url, params=None, headers=None):
+    def fake(url, params=None, headers=None, **_kwargs):
         calls.append(url)
         query = parse_qs(urlparse(url).query)
         start = query["start"][0]
         end = query["end"][0]
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}", start)
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}", end)
-        assert int(query["length"][0]) <= 1000
-        assert query["length"][0] != "5000"
+        assert query["length"][0] == "240"
+        assert query["sort[0][direction]"][0] == "desc"
         span = datetime.strptime(end, "%Y-%m-%dT%H") - datetime.strptime(start, "%Y-%m-%dT%H")
-        assert span <= timedelta(days=14)
+        assert span <= timedelta(days=7)
         # 2026-11-14 00:00-04:00 Eastern (EST, UTC-5) is 05:00-09:00 UTC.
         # A later hour and a different respondent must not enter the night.
         wanted = {
@@ -268,12 +270,47 @@ def test_six_month_pjm_history_is_chunked_and_parses_a_realistic_night(monkeypat
         }
 
     monkeypatch.setenv("EIA_API_KEY", "secret-key")
+    monkeypatch.setattr("ai_demand.pjm.time.sleep", lambda _seconds: None)
     monkeypatch.setattr("ai_demand.pjm.get_json", fake)
     points = fetch_pjm_history(date(2026, 5, 15), date(2026, 11, 14))
     nights, _incomplete = classify_overnight(points)
     assert len(calls) > 1
     # (82000 + 84000 + 86028 + 88000 + 90115) / 5
     assert nights[date(2026, 11, 14)] == pytest.approx(86028.6)
+
+
+def test_a_failed_pjm_window_keeps_the_other_nights(monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+
+    def fake(url, params=None, headers=None, retries=1, timeout=None):
+        query = parse_qs(urlparse(url).query)
+        start = query["start"][0]
+        if start == "2026-11-09T00":
+            raise TimeoutError("read timed out")
+        night = "2026-11-05" if start < "2026-11-09T00" else "2026-11-18"
+        data = [
+            {
+                "period": f"{night}{hour}",
+                "respondent": "PJM",
+                "type": "D",
+                "type-name": "Demand",
+                "value": value,
+                "value-units": "megawatthours",
+            }
+            for hour, value in (("T05", "10"), ("T06", "20"), ("T07", "30"), ("T08", "40"), ("T09", "50"))
+        ]
+        return {"response": {"total": "5", "frequency": "hourly", "data": data}}
+
+    monkeypatch.setenv("EIA_API_KEY", "secret-key")
+    monkeypatch.setattr("ai_demand.pjm.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("ai_demand.pjm.EIA_HISTORY_ATTEMPTS", 1)
+    monkeypatch.setattr("ai_demand.pjm.get_json", fake)
+    points = fetch_pjm_history(date(2026, 11, 8), date(2026, 11, 20), chunk_days=7)
+    nights, _incomplete = classify_overnight(points)
+    assert nights[date(2026, 11, 5)] == pytest.approx(30)
+    assert nights[date(2026, 11, 18)] == pytest.approx(30)
+    # 2026-11-10 sits in the window that timed out.
+    assert date(2026, 11, 10) not in nights
 
 
 def test_pjm_history_without_a_key_does_not_call_the_api(monkeypatch):
