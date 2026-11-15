@@ -17,7 +17,7 @@ from ai_demand.config import HISTORY_COLUMNS, HISTORY_HEADER
 from ai_demand.errors import SourceError
 from ai_demand.history import read_rows
 from ai_demand.openrouter import OpenRouterDay
-from ai_demand.pjm import fetch_pjm_history, seven_night_mean
+from ai_demand.pjm import classify_overnight, fetch_pjm_history, seven_night_mean
 
 
 def test_inclusive_dates_cover_the_default_span():
@@ -195,6 +195,85 @@ def test_pjm_history_paginates_under_the_5000_row_cap(monkeypatch):
     assert "data[0]=value" in calls[0]
     assert "facets[respondent][]=PJM" in calls[0]
     assert "%5B" not in calls[0]
+
+
+def test_six_month_pjm_history_is_chunked_and_parses_a_realistic_night(monkeypatch):
+    """Run 43716184862 timed out on one length=5000 call. Keep each window small."""
+    import re
+    from urllib.parse import parse_qs, urlparse
+
+    calls = []
+
+    def fake(url, params=None, headers=None):
+        calls.append(url)
+        query = parse_qs(urlparse(url).query)
+        start = query["start"][0]
+        end = query["end"][0]
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}", start)
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}", end)
+        assert int(query["length"][0]) <= 1000
+        assert query["length"][0] != "5000"
+        span = datetime.strptime(end, "%Y-%m-%dT%H") - datetime.strptime(start, "%Y-%m-%dT%H")
+        assert span <= timedelta(days=14)
+        # 2026-11-14 00:00-04:00 Eastern (EST, UTC-5) is 05:00-09:00 UTC.
+        # A later hour and a different respondent must not enter the night.
+        wanted = {
+            "2026-11-14T05": "82000",
+            "2026-11-14T06": "84000",
+            "2026-11-14T07": "86028",
+            "2026-11-14T08": "88000",
+            "2026-11-14T09": "90115",
+        }
+        data = []
+        for period, value in wanted.items():
+            if start <= period <= end:
+                data.append(
+                    {
+                        "period": period,
+                        "respondent": "PJM",
+                        "respondent-name": "PJM Interconnection, LLC",
+                        "type": "D",
+                        "type-name": "Demand",
+                        "value": value,
+                        "value-units": "megawatthours",
+                    }
+                )
+        if start <= "2026-11-14T15" <= end:
+            data.append(
+                {
+                    "period": "2026-11-14T15",
+                    "respondent": "PJM",
+                    "type": "D",
+                    "type-name": "Demand",
+                    "value": "120000",
+                    "value-units": "megawatthours",
+                }
+            )
+            data.append(
+                {
+                    "period": "2026-11-14T05",
+                    "respondent": "MISO",
+                    "type": "D",
+                    "value": "1",
+                    "value-units": "megawatthours",
+                }
+            )
+        return {
+            "response": {
+                "total": str(len(data)),
+                "dateFormat": 'YYYY-MM-DD"T"HH24',
+                "frequency": "hourly",
+                "data": data,
+            }
+        }
+
+    monkeypatch.setenv("EIA_API_KEY", "secret-key")
+    monkeypatch.setattr("ai_demand.pjm.get_json", fake)
+    points = fetch_pjm_history(date(2026, 5, 15), date(2026, 11, 14))
+    nights, _incomplete = classify_overnight(points)
+    assert len(calls) > 1
+    # (82000 + 84000 + 86028 + 88000 + 90115) / 5
+    assert nights[date(2026, 11, 14)] == pytest.approx(86028.6)
 
 
 def test_pjm_history_without_a_key_does_not_call_the_api(monkeypatch):

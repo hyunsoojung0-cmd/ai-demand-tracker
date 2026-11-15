@@ -162,7 +162,13 @@ def _eia_url(api_key: str) -> str:
     return EIA_URL + "?" + urlencode(params, safe="[]")
 
 
-EIA_PAGE_LENGTH = 5000
+# Workflow run 43716184862 asked for the whole backfill in one length=5000
+# call. EIA answered with HTTP 5xx and then a read timeout, so every PJM cell
+# stayed blank. The daily job only requests 240 hours and succeeds with the
+# same key. History is therefore taken in two-week windows, each small enough
+# to return, and paged with offset only if a window comes back full.
+EIA_HISTORY_CHUNK_DAYS = 14
+EIA_PAGE_LENGTH = 1000
 
 
 def _raw_rows(payload: dict) -> tuple[list, int | None]:
@@ -197,22 +203,21 @@ def _eia_history_url(api_key: str, start: str, end: str, offset: int, length: in
     return EIA_URL + "?" + urlencode(params, safe="[]")
 
 
-def fetch_pjm_history(start: date, end: date, page_length: int = EIA_PAGE_LENGTH) -> list[tuple[datetime, float]]:
-    """Hourly PJM demand from six nights before ``start`` through ``end``.
+def _format_hour(moment: datetime) -> str:
+    return moment.strftime("%Y-%m-%dT%H")
 
-    EIA returns at most 5000 rows per call, so the pages walk ``offset`` until
-    a short page or the reported total is reached. The extra six nights let the
-    first rows of a backfill form a 7-night average when those hours exist.
-    """
-    key = os.environ.get("EIA_API_KEY", "").strip()
-    if not key:
-        raise SourceError("missing_key")
-    query_start = f"{(start - timedelta(days=6)).isoformat()}T00"
-    query_end = f"{(end + timedelta(days=1)).isoformat()}T12"
+
+def _fetch_eia_window(
+    api_key: str,
+    start: datetime,
+    end: datetime,
+    page_length: int,
+) -> list[tuple[datetime, float]]:
+    """One short hourly window, paged if EIA fills ``page_length``."""
     points: list[tuple[datetime, float]] = []
     offset = 0
     while True:
-        url = _eia_history_url(key, query_start, query_end, offset, page_length)
+        url = _eia_history_url(api_key, _format_hour(start), _format_hour(end), offset, page_length)
         try:
             payload = get_json(url)
         except Exception as exc:
@@ -225,6 +230,27 @@ def fetch_pjm_history(start: date, end: date, page_length: int = EIA_PAGE_LENGTH
             break
         if total is not None and offset >= total:
             break
+    return points
+
+
+def fetch_pjm_history(start: date, end: date, page_length: int = EIA_PAGE_LENGTH) -> list[tuple[datetime, float]]:
+    """Hourly PJM demand from six nights before ``start`` through ``end``.
+
+    The window is split into ``EIA_HISTORY_CHUNK_DAYS``-long requests. Each
+    ``start``/``end`` uses the hourly form ``YYYY-MM-DDTHH``. The extra six
+    nights let the first rows of a backfill form a 7-night average when those
+    hours exist.
+    """
+    key = os.environ.get("EIA_API_KEY", "").strip()
+    if not key:
+        raise SourceError("missing_key")
+    cursor = datetime(start.year, start.month, start.day) - timedelta(days=6)
+    last = datetime(end.year, end.month, end.day) + timedelta(days=1, hours=12)
+    points: list[tuple[datetime, float]] = []
+    while cursor <= last:
+        chunk_end = min(last, cursor + timedelta(days=EIA_HISTORY_CHUNK_DAYS) - timedelta(hours=1))
+        points.extend(_fetch_eia_window(key, cursor, chunk_end, page_length))
+        cursor = chunk_end + timedelta(hours=1)
     if not points:
         raise SourceError("not_in_response")
     return points

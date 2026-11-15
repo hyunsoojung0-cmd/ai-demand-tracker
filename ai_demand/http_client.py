@@ -44,12 +44,17 @@ def get_json(
             return response.json()
         except (requests.RequestException, ValueError) as exc:
             last = exc
+            detail = type(exc).__name__
+            response = getattr(exc, "response", None)
+            if response is not None and getattr(response, "status_code", None):
+                detail = f"{detail} {response.status_code}"
+            # Path only. The query can carry an EIA key or other secret.
             log.warning(
                 "GET %s attempt %s/%s failed: %s",
                 url.split("?", 1)[0],
                 attempt,
                 retries,
-                type(exc).__name__,
+                detail,
             )
             if attempt >= retries or not _retryable(exc):
                 break
