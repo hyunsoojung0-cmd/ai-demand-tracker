@@ -1,0 +1,76 @@
+name: 6개월 백필
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "시작일 YYYY-MM-DD"
+        required: false
+        default: "2026-05-15"
+        type: string
+      end_date:
+        description: "종료일 YYYY-MM-DD. 비우면 어제(KST)"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: ai-demand-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Write data/backfill_6m.csv
+        env:
+          EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          args=(--start "${{ github.event.inputs.start_date }}" --csv data/backfill_6m.csv)
+          if [ -n "${{ github.event.inputs.end_date }}" ]; then
+            args+=(--end "${{ github.event.inputs.end_date }}")
+          fi
+          python -m ai_demand.backfill6m "${args[@]}"
+
+      - name: Commit data/backfill_6m.csv
+        run: |
+          git config user.name "ai-demand-bot"
+          git config user.email "ai-demand-bot@users.noreply.github.com"
+          git add data/backfill_6m.csv
+          if git diff --cached --quiet; then
+            echo "No changes in data/backfill_6m.csv"
+            exit 0
+          fi
+          git commit -m "chore: update 6-month backfill [skip ci]"
+          ok=0
+          for attempt in 1 2 3; do
+            if git pull --rebase origin main && git push origin HEAD:main; then
+              ok=1
+              break
+            fi
+            echo "push attempt ${attempt} failed"
+            sleep $((attempt * 2))
+          done
+          if [ "$ok" != 1 ]; then
+            echo "failed to push data/backfill_6m.csv"
+            exit 1
+          fi
