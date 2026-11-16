@@ -1,4 +1,5 @@
 import logging
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -67,6 +68,11 @@ def _patch_success(monkeypatch):
 
     monkeypatch.setattr("ai_demand.collect.fetch_openrouter", _openrouter)
     monkeypatch.setattr("ai_demand.collect.fetch_huggingface", _huggingface)
+    monkeypatch.setattr(
+        "ai_demand.collect.fetch_vast_availability",
+        lambda: {"h100": 13, "h200": 14, "b200": 10},
+    )
+    monkeypatch.setenv("CHART_DIR", tempfile.mkdtemp(prefix="ai-demand-charts-"))
 
 
 def test_notes_keep_a_stable_source_order():
@@ -101,11 +107,13 @@ def test_collect_replaces_today_and_keeps_the_backfill_row(tmp_path, monkeypatch
     )
     assert collect(path, today=date(2026, 11, 15)) == 0
     message = capsys.readouterr().out
-    assert "   - us-east-1 p5 (H100): 1단계 (<5%)" in message.splitlines()
+    assert "us-east-1 p5 (H100): 1단계 (<5%)" in message
     assert "7일전" not in message
     assert "↑" not in message
-    assert "H100: $2.67/hr (Δ +33.3%) / 최저 $1.67" in message
-    assert "전일 다운로드: 73,713 (7일 평균 대비 -10.8%)" in message
+    assert "H100 $2.67 (Δ +33.3%)" in message
+    assert "H100 13대" in message
+    assert "vLLM" not in message
+    assert "Hugging Face" not in message
     assert "데이터 없음 (EIA_API_KEY 없음)" in message
     assert "종합: Stable" in message
     assert "Data: Vast.ai" in message
@@ -132,6 +140,9 @@ def test_collect_replaces_today_and_keeps_the_backfill_row(tmp_path, monkeypatch
     )
     assert today["or_total_tokens"] == ""
     assert today["hf_basket_alltime"] == ""
+    assert today["vast_h100_avail"] == "13"
+    assert today["vast_h200_avail"] == "14"
+    assert today["vast_b200_avail"] == "10"
 
 
 def test_collect_message_compares_each_spot_with_prior_day_and_week(tmp_path, monkeypatch, capsys):
@@ -163,10 +174,10 @@ def test_collect_message_compares_each_spot_with_prior_day_and_week(tmp_path, mo
     )
     assert collect(path, today=date(2026, 11, 15)) == 0
     message = capsys.readouterr().out
-    assert "   - us-east-1 p5 (H100): 1단계 (<5%) → (전일 동일, 7일전 1단계)" in message
-    assert "   - us-east-1 p4d (A100): 4단계 (15-20%) ↑ (전일 3단계, 7일전 2단계)" in message
-    assert "   - us-west-2 p5 (H100): 1단계 (<5%) ↓ (전일 2단계, 7일전 1단계)" in message
-    assert "   - us-west-2 p4d (A100): 5단계 (>20%) → (전일 동일, 7일전 3단계)" in message
+    assert "us-east-1 p5 (H100): 1단계 (<5%) → (전일 동일, 7일전 1단계)" in message
+    assert "us-east-1 p4d (A100): 4단계 (15-20%) ↑ (전일 3단계, 7일전 2단계)" in message
+    assert "us-west-2 p5 (H100): 1단계 (<5%) ↓ (전일 2단계, 7일전 1단계)" in message
+    assert "us-west-2 p4d (A100): 5단계 (>20%) → (전일 동일, 7일전 3단계)" in message
     # Per-line arrows disagree, but the four-bucket average is unchanged (1.75), so Spot stays 0.
     assert "종합: Stable" in message
     rows = read_rows(path)
@@ -198,7 +209,15 @@ def test_all_sources_failing_exits_nonzero(tmp_path, monkeypatch, capsys):
     def boom():
         raise SourceError("request_failed")
 
-    for name in ("fetch_spot", "fetch_vast", "fetch_pypi", "fetch_pjm", "fetch_openrouter", "fetch_huggingface"):
+    for name in (
+        "fetch_spot",
+        "fetch_vast",
+        "fetch_vast_availability",
+        "fetch_pypi",
+        "fetch_pjm",
+        "fetch_openrouter",
+        "fetch_huggingface",
+    ):
         monkeypatch.setattr(f"ai_demand.collect.{name}", boom)
     path = tmp_path / "history.csv"
     assert collect(path, today=date(2026, 11, 15)) == 1
@@ -206,10 +225,51 @@ def test_all_sources_failing_exits_nonzero(tmp_path, monkeypatch, capsys):
     assert row["overall"] == "Stable"
     assert row["spot_use1_p5"] == ""
     assert row["notes"] == (
-        "spot: request failed; vast: request failed; vllm: request failed; "
-        "pjm: request failed; openrouter: request failed; hf: request failed"
+        "spot: request failed; vast: request failed; vast_avail: request failed; "
+        "vllm: request failed; pjm: request failed; openrouter: request failed; hf: request failed"
     )
     assert "데이터 없음 (요청 실패)" in capsys.readouterr().out
+
+
+def test_chart_failure_still_sends_the_text(tmp_path, monkeypatch, caplog):
+    _patch_success(monkeypatch)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("CHAT_ID", "chat")
+    sent = {}
+    monkeypatch.setattr(
+        "ai_demand.collect.send_telegram",
+        lambda text, token, chat: sent.setdefault("text", text),
+    )
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("chart broke")
+
+    monkeypatch.setattr("ai_demand.charts.render_charts", boom)
+    path = tmp_path / "history.csv"
+    with caplog.at_level(logging.INFO):
+        assert collect(path, today=date(2026, 11, 15)) == 0
+    assert "종합" in sent["text"]
+    assert "charts failed" in caplog.text
+
+
+def test_dry_run_saves_chart_files_without_sending(tmp_path, monkeypatch):
+    _patch_success(monkeypatch)
+    chart_path = tmp_path / "charts"
+    monkeypatch.setenv("CHART_DIR", str(chart_path))
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("CHAT_ID", "chat")
+
+    def _no_send(*_args, **_kwargs):
+        raise AssertionError("telegram sent")
+
+    monkeypatch.setattr("ai_demand.collect.send_telegram", _no_send)
+    monkeypatch.setattr("ai_demand.telegram.send_album", _no_send)
+    path = tmp_path / "history.csv"
+    upsert_rows(path, [_blank("2026-11-14", vast_h100_median="2", notes="backfill")])
+    before = path.read_bytes()
+    assert collect(path, dry_run=True, today=date(2026, 11, 15)) == 0
+    assert path.read_bytes() == before
+    assert any(chart_path.glob("*.png"))
 
 
 def test_already_collected_matches_only_todays_kst_row(tmp_path):
@@ -234,8 +294,21 @@ def test_fallback_skips_collection_and_telegram_when_today_exists(tmp_path, monk
     def boom():
         raise AssertionError("source fetched")
 
-    for name in ("fetch_spot", "fetch_vast", "fetch_pypi", "fetch_pjm", "fetch_openrouter", "fetch_huggingface"):
+    for name in (
+        "fetch_spot",
+        "fetch_vast",
+        "fetch_vast_availability",
+        "fetch_pypi",
+        "fetch_pjm",
+        "fetch_openrouter",
+        "fetch_huggingface",
+    ):
         monkeypatch.setattr(f"ai_demand.collect.{name}", boom)
+
+    def _no_charts(*_args, **_kwargs):
+        raise AssertionError("charts published")
+
+    monkeypatch.setattr("ai_demand.collect.publish_charts", _no_charts)
 
     def _no_send(*_args, **_kwargs):
         raise AssertionError("telegram sent")
@@ -291,3 +364,6 @@ def test_daily_workflow_checks_the_fallback_cron_before_collecting():
     assert 'github.event.schedule' in text
     assert '"15 0 * * *"' in text
     assert "--fallback" in text
+    assert "fonts-nanum" in text
+    assert "upload-artifact" in text
+    assert "daily-charts" in text

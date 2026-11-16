@@ -84,33 +84,40 @@ def test_full_commentary_names_the_push_moves_and_trends():
         )
     view = _view()
     score = _score(
-        ("vast_h100", -1),
-        ("vast_h200", -1),
-        ("vllm", -1),
+        ("vast_price", -1),
         ("pjm", 1),
         ("openrouter", 1),
         ("spot", 0),
         verdict="Stable",
     )
-    # Price down and usage up, with winter PJM and a vLLM decline.
     text = "\n".join(build_commentary(view, score, merge_history(rows, []), notes="vast: dod vs backfill"))
-    assert "6개 지표 중 강세 2 · 중립 1 · 약세 3" in text
-    assert "강세: PJM 야간부하 7일 평균 상회, OpenRouter 토큰 7일 평균 상회" in text
-    assert "약세:" in text
-    assert "Vast H100·H200 가격 하락" in text
+    assert "4개 지표 중 강세 2 · 중립 1 · 약세 1" in text
+    assert "강세: OpenRouter 토큰 7일 평균 상회, PJM 야간부하 7일 평균 상회" in text
+    assert "약세: Vast 중간가 하락" in text
     assert "백필 일별값과 비교" in text
     assert "하루 변동이 큼" in text
     assert "📈 추이: OpenRouter 토큰 7일평균" in text
     assert "30일 전 대비" in text
     assert "90일 전 대비" in text
-    assert "vLLM 7일평균" in text
+    assert "vLLM" not in text
     assert "PJM 야간 7일평균" in text
     assert "Vast H100 중간가 7일평균" in text
     assert "Spot 중단률: 7일 전보다 상승 2 · 하락 1 · 보합 1" in text
     assert "수요 우위 국면" in text
     assert "난방 수요" in text
-    assert "배포 채널" in text
     assert len(text.splitlines()) <= 10
+
+
+def test_price_and_availability_are_read_together():
+    tight = _view(
+        vast_avail={"h100": 8, "h200": 8, "b200": 4},
+        vast_avail_prev={"h100": 12, "h200": 12, "b200": 8},
+    )
+    text = "\n".join(build_commentary(tight, _score(("vast_price", 1), ("vast_avail", 1), verdict="Strong"), {}))
+    assert "공급이 빠듯하고 수요가 강한" in text
+    loose = _view()
+    text = "\n".join(build_commentary(loose, _score(("vast_price", -1), ("vast_avail", -1), verdict="Softening"), {}))
+    assert "공급이 풀리는" in text
 
 
 def test_backfill_price_jump_does_not_count_as_rising_rent_in_the_prose():
@@ -153,12 +160,12 @@ def test_missing_sources_skip_their_sentences():
         or_total=None,
         overall="Strong",
     )
-    score = _score(("vllm", 1), verdict="Stable")
+    score = _score(("openrouter", 1), verdict="Stable")
     text = "\n".join(build_commentary(view, score, {}))
     assert "1개 지표 중 강세 1 · 중립 0 · 약세 0" in text
-    assert "vLLM 다운로드 7일 평균 상회" in text
+    assert "OpenRouter 토큰 7일 평균 상회" in text
     assert "Vast" not in text
-    assert "OpenRouter" not in text
+    assert "vLLM" not in text
     assert "PJM" not in text
     assert "HF" not in text
     assert "Spot 중단률" not in text

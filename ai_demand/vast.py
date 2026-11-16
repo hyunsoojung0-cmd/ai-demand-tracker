@@ -144,6 +144,51 @@ def fetch_vast() -> VastFetch:
         raise SourceError("request_failed") from exc
 
 
+AVAIL_QUERY_LIMIT = 10000
+
+
+def parse_availability(payload: dict) -> dict[str, int]:
+    """Distinct rentable ``machine_id`` values for H100 SXM, H200, and B200.
+
+    A GPU with no offers is 0. A truncated page is refused so a capped count
+    is not stored as if it were complete. Offers without ``machine_id`` are
+    skipped rather than counted twice under another id.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("offers"), list):
+        raise SourceError("not_in_response")
+    if payload.get("truncated") is True:
+        raise SourceError("truncated")
+    seen = {key: set() for key in ("h100", "h200", "b200")}
+    for offer in payload["offers"]:
+        if not isinstance(offer, dict) or offer.get("rentable") is False:
+            continue
+        key = VAST_BUNDLE_NAMES.get(str(offer.get("gpu_name") or "").strip())
+        if key not in seen:
+            continue
+        machine = offer.get("machine_id")
+        if machine is None or machine == "":
+            continue
+        seen[key].add(machine)
+    return {key: len(machines) for key, machines in seen.items()}
+
+
+def fetch_vast_availability() -> dict[str, int]:
+    """Unauthenticated bundles search. No API key.
+
+    Same rentable on-demand filter as the price fallback, with a high limit.
+    The live check on 2026-11-16 returned HTTP 200 and ``truncated: false``.
+    """
+    query = dict(VAST_BUNDLE_QUERY)
+    query["limit"] = AVAIL_QUERY_LIMIT
+    try:
+        payload = get_json(VAST_BUNDLES_URL, params={"q": json.dumps(query, separators=(",", ":"))})
+    except SourceError:
+        raise
+    except Exception as exc:
+        raise SourceError("request_failed") from exc
+    return parse_availability(payload)
+
+
 def fetch_public_payload() -> dict:
     """Public feed for the backfill. Bundles have no daily history, so there is no fallback."""
     try:

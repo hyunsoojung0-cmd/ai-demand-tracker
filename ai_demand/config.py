@@ -27,9 +27,14 @@ PJM_VS_MA_DOWN = -0.01
 OR_VS_MA_UP = 0.05
 OR_VS_MA_DOWN = -0.05
 
-# Hugging Face implied daily downloads versus the 7-day moving average.
+# Hugging Face is collected for the sheet and is not part of the verdict.
 HF_VS_MA_UP = 0.10
 HF_VS_MA_DOWN = -0.10
+
+# Rentable-machine count versus the previous day. The score sign is flipped:
+# fewer machines (a drop past this band) is +1, more machines is -1.
+VAST_AVAIL_UP = 0.05
+VAST_AVAIL_DOWN = -0.05
 
 # Sum of the signals that actually had data.
 VERDICT_STRONG_AT = 2
@@ -166,6 +171,9 @@ HISTORY_COLUMNS = (
     "hf_basket_30d",
     "hf_basket_alltime",
     "hf_implied_daily",
+    "vast_h100_avail",
+    "vast_h200_avail",
+    "vast_b200_avail",
 )
 
 HISTORY_HEADER = ",".join(HISTORY_COLUMNS)

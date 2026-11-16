@@ -50,4 +50,7 @@ class DayView:
     hf_failed: int = 0
     hf_basket_size: int = 0
     hf_reason: str = "요청 실패"
+    vast_avail: dict[str, int | None] = field(default_factory=dict)
+    vast_avail_prev: dict[str, int | None] = field(default_factory=dict)
+    vast_avail_reason: str = "요청 실패"
     overall: str = ""

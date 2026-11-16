@@ -1,7 +1,7 @@
 """Korean Telegram summary. Plain text, so labels such as ``<5%`` need no escaping."""
 
 from ai_demand.commentary import build_commentary, fit_telegram
-from ai_demand.config import HF_BASKET, SHEET_URL, SPOT_COLUMNS, SPOT_INSTANCES, VAST_DISPLAY
+from ai_demand.config import SHEET_URL, SPOT_COLUMNS, SPOT_INSTANCES, VAST_DISPLAY
 from ai_demand.model import DayView, VastQuote
 from ai_demand.score import Score, pct_change, score_view
 
@@ -11,7 +11,10 @@ def _missing(reason: str) -> str:
 
 
 def _pct(frac: float) -> str:
-    return f"{frac * 100:+.1f}%"
+    percent = frac * 100
+    if abs(percent) < 0.05:
+        percent = 0.0
+    return f"{percent:+.1f}%"
 
 
 def _stage(bucket: int) -> str:
@@ -42,96 +45,74 @@ def spot_history_suffix(current: int, prior: int | None, week: int | None) -> st
     return f"{arrow} ({', '.join(bits)})"
 
 
-def _spot_lines(view: DayView) -> list[str]:
-    lines = ["1. AWS Spot 중단률"]
+def _spot_line(view: DayView) -> str:
+    parts = []
+    any_value = False
     for target in SPOT_INSTANCES:
         bucket = view.spot_values.get(target.column)
         if bucket is None:
-            shown = _missing(view.spot_reason)
-        else:
-            label = view.spot_labels.get(target.column, str(bucket))
-            history = spot_history_suffix(
-                bucket,
-                view.spot_prev.get(target.column),
-                view.spot_week.get(target.column),
-            )
-            shown = f"{_stage(bucket)} ({label}){history}"
-        lines.append(f"   - {target.display}: {shown}")
-    return lines
+            parts.append(f"{target.display}: {_missing(view.spot_reason)}")
+            continue
+        any_value = True
+        label = view.spot_labels.get(target.column, str(bucket))
+        history = spot_history_suffix(
+            bucket,
+            view.spot_prev.get(target.column),
+            view.spot_week.get(target.column),
+        )
+        parts.append(f"{target.display}: {_stage(bucket)} ({label}){history}")
+    if not any_value:
+        return f"4. AWS Spot 중단률: {_missing(view.spot_reason)}"
+    return "4. AWS Spot 중단률: " + " · ".join(parts)
 
 
-def _vast_line(name: str, quote: VastQuote | None, previous: float | None, reason: str) -> str:
+def _price_bit(name: str, quote: VastQuote | None, previous: float | None, reason: str) -> str:
     quote = quote or VastQuote()
-    if quote.median is None and quote.min_price is None:
-        return f"   - {name}: {_missing(reason)}"
     if quote.median is None:
-        median_bit = _missing(reason)
-    else:
-        change = pct_change(quote.median, previous)
-        price = f"${quote.median:.2f}/hr"
-        if change is None:
-            median_bit = f"{price} (Δ 데이터 없음)"
-        else:
-            median_bit = f"{price} (Δ {_pct(change)})"
-    if quote.min_price is None:
-        low_bit = "최저 데이터 없음"
-    else:
-        low_bit = f"최저 ${quote.min_price:.2f}"
-    return f"   - {name}: {median_bit} / {low_bit}"
-
-
-def _vast_lines(view: DayView) -> list[str]:
-    lines = ["2. Vast.ai 가격 (중간값 / 최저)"]
-    for key, name in VAST_DISPLAY:
-        lines.append(_vast_line(name, view.vast.get(key), view.vast_prev.get(key), view.vast_reason))
-    return lines
-
-
-def _vllm_lines(view: DayView) -> list[str]:
-    lines = ["3. vLLM PyPI"]
-    if view.vllm_last_day is None:
-        lines.append(f"   - {_missing(view.vllm_reason)}")
-        return lines
-    shown = f"{view.vllm_last_day:,}"
-    change = pct_change(view.vllm_last_day, view.vllm_ma)
+        return f"{name}: {_missing(reason)}"
+    change = pct_change(quote.median, previous)
+    price = f"${quote.median:.2f}"
     if change is None:
-        lines.append(f"   - 전일 다운로드: {shown} (7일 평균 대비 데이터 없음)")
-    else:
-        lines.append(f"   - 전일 다운로드: {shown} (7일 평균 대비 {_pct(change)})")
-    return lines
+        return f"{name} {price}"
+    return f"{name} {price} (Δ {_pct(change)})"
 
 
-def _pjm_lines(view: DayView) -> list[str]:
-    lines = ["4. PJM 야간 기저부하"]
+def _vast_price_line(view: DayView) -> str:
+    parts = [_price_bit(name, view.vast.get(key), view.vast_prev.get(key), view.vast_reason) for key, name in VAST_DISPLAY]
+    if all(part.endswith(")") and "데이터 없음" in part for part in parts):
+        return f"2. Vast.ai 중간 가격: {_missing(view.vast_reason)}"
+    return "2. Vast.ai 중간 가격: " + " · ".join(parts)
+
+
+def _avail_bit(name: str, current: int | None, previous: int | None, reason: str) -> str:
+    if current is None:
+        return f"{name}: {_missing(reason)}"
+    bit = f"{name} {int(current):,}대"
+    change = pct_change(current, previous)
+    if change is not None:
+        bit += f" (Δ {_pct(change)})"
+    return bit
+
+
+def _avail_line(view: DayView) -> str:
+    parts = [
+        _avail_bit(name, view.vast_avail.get(key), view.vast_avail_prev.get(key), view.vast_avail_reason)
+        for key, name in VAST_DISPLAY
+    ]
+    if all("데이터 없음" in part for part in parts):
+        return f"3. Vast.ai 대여 가능: {_missing(view.vast_avail_reason)}"
+    return "3. Vast.ai 대여 가능: " + " · ".join(parts)
+
+
+def _pjm_line(view: DayView) -> str:
     if view.pjm_mw is None:
-        lines.append(f"   - {_missing(view.pjm_reason)}")
-        return lines
-    parts = []
-    day_over_day = pct_change(view.pjm_mw, view.pjm_prev)
-    versus_average = pct_change(view.pjm_mw, view.pjm_ma)
-    if day_over_day is None:
-        parts.append("전일 대비 데이터 없음")
-    else:
-        parts.append(f"전일 대비 {_pct(day_over_day)}")
-    if versus_average is None:
-        parts.append("7일 평균 대비 데이터 없음")
-    else:
-        parts.append(f"7일 평균 대비 {_pct(versus_average)}")
-    lines.append(f"   - 야간 평균 {view.pjm_mw:,.0f} MW ({', '.join(parts)})")
-    return lines
+        return f"5. PJM 야간 기저부하: {_missing(view.pjm_reason)}"
+    shown = f"{view.pjm_mw:,.0f} MW"
+    return f"5. PJM 야간 기저부하: {shown} ({_comparison_bits(view.pjm_mw, view.pjm_prev, view.pjm_ma)})"
 
 
 def _billions(tokens: int) -> str:
     return f"{tokens / 1_000_000_000:,.1f}B"
-
-
-def _compact_count(value: int) -> str:
-    magnitude = abs(value)
-    if magnitude >= 1_000_000_000:
-        return f"{value / 1_000_000_000:.1f}B"
-    if magnitude >= 1_000_000:
-        return f"{value / 1_000_000:.1f}M"
-    return f"{value:,}"
 
 
 def _comparison_bits(current: float | None, previous: float | None, average: float | None) -> str:
@@ -149,42 +130,12 @@ def _comparison_bits(current: float | None, previous: float | None, average: flo
     return ", ".join(parts)
 
 
-def _openrouter_lines(view: DayView) -> list[str]:
-    lines = ["5. OpenRouter 토큰"]
+def _openrouter_line(view: DayView) -> str:
     if view.or_total is None or view.or_date is None:
-        lines.append(f"   - {_missing(view.or_reason)}")
-        return lines
-    label = f"{view.or_date.month}/{view.or_date.day}"
-    lines.append(
-        f"   - 전체 토큰({label} UTC): {_billions(view.or_total)} ({_comparison_bits(view.or_total, view.or_previous, view.or_ma)})"
-    )
-    if view.or_top1 and view.or_top5_share is not None:
-        share = f"{view.or_top5_share * 100:.0f}%"
-        lines.append(f"   - 1위 모델: {view.or_top1} (상위 5개 비중 {share})")
-    return lines
-
-
-def _huggingface_lines(view: DayView) -> list[str]:
-    lines = ["6. Hugging Face 다운로드"]
-    size = view.hf_basket_size or len(HF_BASKET)
-    if view.hf_30d is None and view.hf_alltime is None and view.hf_implied is None:
-        lines.append(f"   - {_missing(view.hf_reason)}")
-        return lines
-    if view.hf_failed:
-        lines.append(f"   - {_missing('일부 모델 실패')}")
-    elif view.hf_implied is None:
-        lines.append("   - 누적 기준값 저장 (내일부터 일일치 표시)")
-    else:
-        change = pct_change(view.hf_implied, view.hf_implied_ma)
-        daily = f"{view.hf_implied:,}"
-        if change is None:
-            lines.append(f"   - 대표 모델 {size}개 일일 다운로드: {daily}")
-        else:
-            lines.append(f"   - 대표 모델 {size}개 일일 다운로드: {daily} (7일 평균 대비 {_pct(change)})")
-    if view.hf_30d is not None:
-        suffix = f" ({size - view.hf_failed}/{size}개 합산)" if view.hf_failed else ""
-        lines.append(f"   - 30일 누적: {_compact_count(view.hf_30d)}{suffix}")
-    return lines
+        return f"1. OpenRouter 일일 토큰: {_missing(view.or_reason)}"
+    label = f"{view.or_date.month}/{view.or_date.day} UTC"
+    compared = _comparison_bits(view.or_total, view.or_previous, view.or_ma)
+    return f"1. OpenRouter 일일 토큰: {_billions(view.or_total)} ({label}, {compared})"
 
 
 def _score_for(view: DayView, score: Score | None) -> Score:
@@ -200,14 +151,15 @@ def render(
     history: dict | None = None,
     notes: str = "",
 ) -> str:
-    lines = [f"📊 [AI Demand Daily] {view.date_kst}"]
-    lines.extend(_spot_lines(view))
-    lines.extend(_vast_lines(view))
-    lines.extend(_vllm_lines(view))
-    lines.extend(_pjm_lines(view))
-    lines.extend(_openrouter_lines(view))
-    lines.extend(_huggingface_lines(view))
-    lines.append(f"종합: {view.overall}")
+    lines = [
+        f"📊 [AI Demand Daily] {view.date_kst}",
+        _openrouter_line(view),
+        _vast_price_line(view),
+        _avail_line(view),
+        _spot_line(view),
+        _pjm_line(view),
+        f"종합: {view.overall}",
+    ]
     lines.extend(build_commentary(view, _score_for(view, score), history, notes))
     lines.append(f"📈 시트: {SHEET_URL}")
     lines.append("Data: Vast.ai")

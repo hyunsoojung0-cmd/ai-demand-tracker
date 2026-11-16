@@ -1,9 +1,11 @@
-"""Collect the four indicators, append today's row, and print or send the summary.
+"""Collect the indicators, append today's row, and print or send the summary.
 
 One source failing is a warning. The process exits 0 unless every source failed
-or the CSV could not be written. ``--dry-run`` prints the message and does not
-write the CSV or call Telegram. Missing ``BOT_TOKEN`` or ``CHAT_ID`` also skips
-the send, and still writes the CSV when this is not a dry run.
+or the CSV could not be written. ``--dry-run`` prints the message, saves chart
+PNGs, and does not write the CSV or call Telegram. Missing ``BOT_TOKEN`` or
+``CHAT_ID`` skips the send and still writes the CSV when this is not a dry run.
+Chart failures are logged and do not change that outcome. vLLM and Hugging Face
+are stored in the CSV and left out of the message, the score, and the charts.
 """
 
 import argparse
@@ -39,7 +41,8 @@ from ai_demand.pypi_stats import fetch_pypi
 from ai_demand.score import score_view
 from ai_demand.spot import fetch_spot
 from ai_demand.telegram import send_telegram
-from ai_demand.vast import fetch_vast
+from ai_demand.charts import publish_charts
+from ai_demand.vast import fetch_vast, fetch_vast_availability
 
 log = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
@@ -58,6 +61,7 @@ def failure_reason_ko(exc: Exception | None) -> str:
             "not_in_response": "응답에 없음",
             "incomplete": "완전한 야간 구간 없음",
             "no_complete_day": "완전한 일자 없음",
+            "truncated": "응답이 잘림",
         }.get(exc.code, "요청 실패")
     if exc is None:
         return "응답에 없음"
@@ -73,6 +77,7 @@ def failure_note(source: str, exc: Exception) -> str:
             "not_in_response": "not in response",
             "incomplete": "no complete night",
             "no_complete_day": "no complete day",
+            "truncated": "availability truncated",
         }.get(exc.code, "request failed")
         return f"{source}: {detail}"
     return f"{source}: request failed"
@@ -85,6 +90,7 @@ def build_notes(
     vast_failure: str | None = None,
     vast_fallback: bool = False,
     vast_vs_backfill: bool = False,
+    vast_avail_failure: str | None = None,
     vllm_failure: str | None = None,
     vllm_ma_missing: bool = False,
     vllm_mismatch: bool = False,
@@ -108,6 +114,8 @@ def build_notes(
             notes.append("vast: bundles fallback")
         if vast_vs_backfill:
             notes.append("vast: dod vs backfill")
+    if vast_avail_failure:
+        notes.append(vast_avail_failure)
     if vllm_failure:
         notes.append(vllm_failure)
     else:
@@ -244,6 +252,7 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
     today_text = (today or kst_today()).isoformat()
     spot, spot_exc = _capture("spot", fetch_spot)
     vast, vast_exc = _capture("vast", fetch_vast)
+    avail, avail_exc = _capture("vast_avail", fetch_vast_availability)
     pypi, pypi_exc = _capture("vllm", fetch_pypi)
     pjm, pjm_exc = _capture("pjm", fetch_pjm)
     openrouter, or_exc = _capture("openrouter", fetch_openrouter)
@@ -287,6 +296,15 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
             hf_failed=huggingface.failed,
             hf_basket_size=huggingface.basket_size,
         )
+    if avail is None:
+        view = replace(view, vast_avail_reason=failure_reason_ko(avail_exc))
+    else:
+        view = replace(
+            view,
+            vast_avail=avail,
+            vast_avail_prev=_availability_prev(previous),
+            vast_avail_reason="응답에 없음",
+        )
     # Spot score uses the same previous row as the ↑/↓ arrow: the average of its r values.
     scored = score_view(view, previous_spots(previous))
     view = replace(view, overall=scored.verdict)
@@ -307,6 +325,7 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
         vast_failure=None if vast_exc is None else failure_note("vast", vast_exc),
         vast_fallback=bool(vast is not None and vast.used_fallback),
         vast_vs_backfill=bool(vast is not None and previous_has_median and "backfill" in previous_notes),
+        vast_avail_failure=None if avail_exc is None else failure_note("vast_avail", avail_exc),
         vllm_failure=None if pypi_exc is None else failure_note("vllm", pypi_exc),
         vllm_ma_missing=pypi is not None and pypi.ma_7d is None,
         vllm_mismatch=bool(
@@ -332,9 +351,10 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
     message = render(view, score=scored, history=merge_history(rows, backfill_rows), notes=notes)
     print(message)
 
-    any_ok = any(item is not None for item in (spot, vast, pypi, pjm, openrouter, huggingface))
+    any_ok = any(item is not None for item in (spot, vast, avail, pypi, pjm, openrouter, huggingface))
     if dry_run:
         log.info("dry_run: skip csv write and telegram")
+        publish_charts(daily_rows=rows, backfill_rows=backfill_rows, view=view, dry_run=True)
         return 0 if any_ok else 1
     try:
         upsert_rows(path, [row_from_view(view, notes)])
@@ -342,7 +362,19 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
         log.error("csv write failed: %s", type(exc).__name__)
         return 1
     _maybe_send(message, dry_run=False)
+    publish_charts(daily_rows=rows, backfill_rows=backfill_rows, view=view, dry_run=False)
     return 0 if any_ok else 1
+
+
+def _availability_prev(row: dict | None) -> dict[str, int | None]:
+    found = {}
+    for key, _display in VAST_DISPLAY:
+        if row is None:
+            found[key] = None
+            continue
+        raw = (row.get(f"vast_{key}_avail") or "").strip()
+        found[key] = int(raw) if raw else None
+    return found
 
 
 def already_collected(path: Path, date_kst: str) -> bool:
@@ -375,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--fallback",
         action="store_true",
-        help="Skip collection and Telegram when the KST date is already in the CSV.",
+        help="Skip collection, charts, and Telegram when the KST date is already in the CSV.",
     )
     parser.add_argument("--backfill", action="store_true", help="Seed 2026-11-02..2026-11-14 and exit.")
     parser.add_argument("--date", type=_parse_date, default=None, help="Override the KST row date (YYYY-MM-DD).")
