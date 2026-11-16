@@ -1,7 +1,7 @@
 import pytest
 
 from ai_demand.model import DayView, VastQuote
-from ai_demand.score import band_signal, score_view, spot_signal, verdict_name
+from ai_demand.score import band_signal, score_view, spot_signal, vast_avail_signal, verdict_name
 
 
 @pytest.mark.parametrize(
@@ -105,7 +105,7 @@ def test_unavailable_signals_are_left_out_and_b200_is_not_scored():
         pjm_ma=None,
     )
     scored = score_view(view, None)
-    assert [part.name for part in scored.signals] == ["vast_h100"]
+    assert [part.name for part in scored.signals] == ["vast_price"]
     assert scored.total == 1
     assert scored.verdict == "Stable"
 
@@ -140,20 +140,21 @@ def test_neutral_present_signals_stay_stable():
         }
     )
     scored = score_view(view, [2, 2, 2, 2])
-    assert [part.value for part in scored.signals] == [0, 0, 0, 0, 0]
+    assert [part.value for part in scored.signals] == [0, 0, 0]
     assert scored.verdict == "Stable"
 
 
-def test_openrouter_and_hf_join_the_score_when_present():
-    view = _view(or_total=106, or_ma=100, hf_implied=89, hf_implied_ma=100)
+def test_openrouter_joins_the_score_and_hf_does_not():
+    view = _view(or_total=106, or_ma=100, hf_implied=89, hf_implied_ma=100, vllm_last_day=50, vllm_ma=100)
     scored = score_view(view, [2, 2, 2, 2])
     signals = {part.name: part.value for part in scored.signals}
     assert signals["openrouter"] == 1
-    assert signals["hf"] == -1
+    assert "hf" not in signals
+    assert "vllm" not in signals
 
 
 def test_live_shaped_snapshot_is_stable():
-    """Spot 1.75 with no history, Vast up, vLLM down, PJM missing -> +1 Stable."""
+    """Spot 1.75 with no history, Vast price up, PJM missing -> +1 Stable."""
     view = _view(
         spot_values={
             "spot_use1_p5": 0,
@@ -175,8 +176,19 @@ def test_live_shaped_snapshot_is_stable():
     scored = score_view(view, None)
     assert [(part.name, part.value) for part in scored.signals] == [
         ("spot", 0),
-        ("vast_h100", 1),
-        ("vast_h200", 1),
-        ("vllm", -1),
+        ("vast_price", 1),
     ]
     assert scored.verdict == "Stable"
+
+
+def test_fewer_rentable_machines_score_positive_and_the_first_day_is_neutral():
+    assert vast_avail_signal({"h100": 10, "h200": 10, "b200": 10}, {"h100": 12, "h200": 12, "b200": 12}) == 1
+    assert vast_avail_signal({"h100": 20, "h200": 10, "b200": 10}, {"h100": 10, "h200": 10, "b200": 10}) == -1
+    assert vast_avail_signal({"h100": 10, "h200": 10, "b200": 10}, {"h100": 10, "h200": 10, "b200": 10}) == 0
+    assert vast_avail_signal({"h100": 10}, {}) is None
+    view = _view(
+        vast_avail={"h100": 8, "h200": 8, "b200": 8},
+        vast_avail_prev={"h100": 12, "h200": 12, "b200": 12},
+    )
+    signals = {part.name: part.value for part in score_view(view, [2, 2, 2, 2]).signals}
+    assert signals["vast_avail"] == 1

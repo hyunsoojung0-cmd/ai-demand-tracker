@@ -5,3 +5,4 @@ __pycache__/
 venv/
 *.csv.tmp
 .mypy_cache/
+charts/

@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 
 from ai_demand.errors import SourceError
-from ai_demand.vast import parse_bundles, parse_daily, parse_public
+from ai_demand.vast import parse_availability, parse_bundles, parse_daily, parse_public
 
 
 def test_parse_public_looks_up_slugs_not_dict_keys():
@@ -66,6 +66,29 @@ def test_parse_bundles_divides_by_gpu_count_and_takes_median():
     assert quotes["h100"].median == 4
     assert quotes["h200"].min_price == 5
     assert quotes["h200"].median == 6
+
+
+def test_parse_availability_counts_distinct_machines_and_keeps_zeros():
+    payload = {
+        "offers": [
+            {"gpu_name": "H100 SXM", "machine_id": 1, "rentable": True},
+            {"gpu_name": "H100 SXM", "machine_id": 1, "rentable": True},
+            {"gpu_name": "H100 SXM", "machine_id": 2, "rentable": True},
+            {"gpu_name": "H100 SXM", "machine_id": 3, "rentable": False},
+            {"gpu_name": "H200", "machine_id": 9, "rentable": True},
+            {"gpu_name": "RTX 4090", "machine_id": 4, "rentable": True},
+            {"gpu_name": "B200", "rentable": True},
+        ],
+        "truncated": False,
+    }
+    assert parse_availability(payload) == {"h100": 2, "h200": 1, "b200": 0}
+    assert parse_availability({"offers": [], "truncated": False}) == {"h100": 0, "h200": 0, "b200": 0}
+    with pytest.raises(SourceError) as truncated:
+        parse_availability({"offers": [], "truncated": True})
+    assert truncated.value.code == "truncated"
+    with pytest.raises(SourceError) as missing:
+        parse_availability({"offers": None})
+    assert missing.value.code == "not_in_response"
 
 
 def test_parse_public_rejects_a_feed_without_our_gpus():

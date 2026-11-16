@@ -146,6 +146,9 @@ def row_from_view(view: DayView, notes: str) -> dict[str, str]:
     row["hf_basket_30d"] = format_int(view.hf_30d)
     row["hf_basket_alltime"] = format_int(view.hf_alltime)
     row["hf_implied_daily"] = format_int(view.hf_implied)
+    for key, _display in VAST_DISPLAY:
+        count = view.vast_avail.get(key)
+        row[f"vast_{key}_avail"] = format_int(None if count is None else int(count))
     return row
 
 
@@ -157,6 +160,7 @@ def assert_header_contract() -> None:
         "vast_b200_min,vast_b200_median,vllm_last_day,vllm_7d_ma,"
         "pjm_overnight_mw,pjm_overnight_7d_ma,overall,notes,"
         "or_total_tokens,or_top5_share,or_top1_model,"
-        "hf_basket_30d,hf_basket_alltime,hf_implied_daily"
+        "hf_basket_30d,hf_basket_alltime,hf_implied_daily,"
+        "vast_h100_avail,vast_h200_avail,vast_b200_avail"
     ):
         raise RuntimeError("history header drifted from the sheet contract")

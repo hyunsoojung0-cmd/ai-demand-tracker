@@ -22,19 +22,17 @@ TELEGRAM_LIMIT = 4096
 _PUSH = {
     ("spot", 1): "Spot 중단률 상승",
     ("spot", -1): "Spot 중단률 하락",
-    ("vast_h100", 1): "Vast H100 가격 상승",
-    ("vast_h100", -1): "Vast H100 가격 하락",
-    ("vast_h200", 1): "Vast H200 가격 상승",
-    ("vast_h200", -1): "Vast H200 가격 하락",
-    ("vllm", 1): "vLLM 다운로드 7일 평균 상회",
-    ("vllm", -1): "vLLM 다운로드 7일 평균 하회",
+    ("vast_price", 1): "Vast 중간가 상승",
+    ("vast_price", -1): "Vast 중간가 하락",
+    ("vast_avail", 1): "Vast 대여 가능 대수 감소",
+    ("vast_avail", -1): "Vast 대여 가능 대수 증가",
     ("pjm", 1): "PJM 야간부하 7일 평균 상회",
     ("pjm", -1): "PJM 야간부하 7일 평균 하회",
     ("openrouter", 1): "OpenRouter 토큰 7일 평균 상회",
     ("openrouter", -1): "OpenRouter 토큰 7일 평균 하회",
-    ("hf", 1): "HF 다운로드 7일 평균 상회",
-    ("hf", -1): "HF 다운로드 7일 평균 하회",
 }
+_PHRASE_ORDER = ("openrouter", "vast_price", "vast_avail", "spot", "pjm")
+_AVAIL_COLUMNS = ("vast_h100_avail", "vast_h200_avail", "vast_b200_avail")
 
 
 def _blank(value) -> bool:
@@ -90,6 +88,10 @@ def overlay_live(history: dict[date, dict[str, str]], view: DayView) -> dict[dat
     for key, quote in view.vast.items():
         if quote is not None and quote.median is not None:
             _put(row, f"vast_{key}_median", quote.median)
+    for key, count in (view.vast_avail or {}).items():
+        _put(row, f"vast_{key}_avail", count)
+    _put(row, "vllm_7d_ma", view.vllm_ma)
+    _put(row, "pjm_overnight_7d_ma", view.pjm_ma)
     for column, bucket in view.spot_values.items():
         _put(row, column, bucket)
     updated[day] = row
@@ -136,6 +138,8 @@ def _arrow(frac: float) -> str:
 
 def _signed(frac: float) -> str:
     percent = frac * 100
+    if abs(percent) < 0.05:
+        percent = 0.0
     if abs(percent) >= 10:
         return f"{percent:+.0f}%"
     return f"{percent:+.1f}%"
@@ -168,16 +172,7 @@ def _signal_map(score: Score) -> dict[str, int]:
 
 def _phrases(signals: dict[str, int], direction: int) -> list[str]:
     phrases = []
-    h100 = signals.get("vast_h100")
-    h200 = signals.get("vast_h200")
-    if h100 == direction and h200 == direction:
-        phrases.append("Vast H100·H200 가격 상승" if direction > 0 else "Vast H100·H200 가격 하락")
-    else:
-        if h100 == direction:
-            phrases.append(_PUSH[("vast_h100", direction)])
-        if h200 == direction:
-            phrases.append(_PUSH[("vast_h200", direction)])
-    for name in ("spot", "vllm", "pjm", "openrouter", "hf"):
+    for name in _PHRASE_ORDER:
         if signals.get(name) == direction:
             phrases.append(_PUSH[(name, direction)])
     return phrases
@@ -220,16 +215,19 @@ def _moves(view: DayView, history: dict[date, dict[str, str]], notes: str) -> li
         quote = view.vast.get(key)
         current = None if quote is None else quote.median
         _add_move(found, label, pct_change(current, view.vast_prev.get(key)), "백필 일별값과 비교" if noisy_vast else "")
-    vllm_series = _numeric_series(history, "vllm_last_day")
-    _add_move(found, "vLLM", pct_change(view.vllm_last_day, vllm_series.get(today - timedelta(days=1))), "")
+    for key, label in (("h100", "Vast H100 가용"), ("h200", "Vast H200 가용"), ("b200", "Vast B200 가용")):
+        _add_move(
+            found,
+            label,
+            pct_change(view.vast_avail.get(key), view.vast_avail_prev.get(key)),
+            "",
+        )
     _add_move(found, "PJM", pct_change(view.pjm_mw, view.pjm_prev), "")
     or_note = ""
     or_change = pct_change(view.or_total, view.or_previous)
     if or_change is not None and abs(or_change) >= OR_DAY_SWING:
         or_note = "하루 변동이 큼"
     _add_move(found, "OpenRouter", or_change, or_note)
-    implied = _numeric_series(history, "hf_implied_daily")
-    _add_move(found, "HF", pct_change(view.hf_implied, implied.get(today - timedelta(days=1))), "")
     found.sort(key=lambda item: (-abs(item[0]), item[1]))
     shown = [item[2] for item in found[:MOVE_LIMIT]]
     if not shown:
@@ -264,7 +262,6 @@ def _trend_lines(view: DayView, history: dict[date, dict[str, str]]) -> list[str
         return []
     specs = (
         ("OpenRouter 토큰", "or_total_tokens", _tokens),
-        ("vLLM", "vllm_last_day", _count),
         ("PJM 야간", "pjm_overnight_mw", _megawatts),
         ("Vast H100 중간가", "vast_h100_median", _price),
     )
@@ -280,6 +277,18 @@ def _trend_lines(view: DayView, history: dict[date, dict[str, str]]) -> list[str
             formatter,
             _change_against(series, today, 30),
             _change_against(series, today, 90),
+        )
+        if line:
+            body.append(line)
+    avail = _availability_total(history)
+    avail_level = moving_average(avail, today)
+    if avail_level is not None:
+        line = _trend_line(
+            "Vast 가용",
+            avail_level,
+            _count,
+            _change_against(avail, today, 30),
+            _change_against(avail, today, 90),
         )
         if line:
             body.append(line)
@@ -310,6 +319,27 @@ def _spot_trend(view: DayView) -> str | None:
     return f"Spot 중단률: 7일 전보다 상승 {rose} · 하락 {fell} · 보합 {flat}"
 
 
+def _availability_total(history: dict[date, dict[str, str]]) -> dict[date, float]:
+    """Sum of the three GPU counts. A day missing any GPU is a gap."""
+    series: dict[date, float] = {}
+    for day, row in history.items():
+        values = []
+        complete = True
+        for column in _AVAIL_COLUMNS:
+            raw = str(row.get(column) or "").strip()
+            if not raw:
+                complete = False
+                break
+            try:
+                values.append(float(raw))
+            except ValueError:
+                complete = False
+                break
+        if complete:
+            series[day] = sum(values)
+    return series
+
+
 def _sign(value: int | None, trend: float | None) -> int | None:
     if value in (-1, 1):
         return value
@@ -325,15 +355,8 @@ def _sign(value: int | None, trend: float | None) -> int | None:
 
 
 def _price_sign(signals: dict[str, int], h100: float | None, h200: float | None, trust_score: bool) -> int | None:
-    scored = []
-    if trust_score:
-        scored = [signals[name] for name in ("vast_h100", "vast_h200") if name in signals and signals[name] != 0]
-    if scored:
-        if all(item > 0 for item in scored):
-            return 1
-        if all(item < 0 for item in scored):
-            return -1
-        return 0
+    if trust_score and "vast_price" in signals:
+        return signals["vast_price"]
     trends = [item for item in (h100, h200) if item is not None]
     if not trends:
         return None
@@ -356,18 +379,22 @@ def _interpretation(view: DayView, score: Score, history: dict[date, dict[str, s
     except ValueError:
         today = None
         month = None
-    or_trend = h100_trend = h200_trend = vllm_trend = pjm_trend = None
+    or_trend = h100_trend = h200_trend = pjm_trend = None
     if today is not None:
         or_trend = _change_against(_numeric_series(history, "or_total_tokens"), today, 30)
         h100_trend = _change_against(_numeric_series(history, "vast_h100_median"), today, 30)
         h200_trend = _change_against(_numeric_series(history, "vast_h200_median"), today, 30)
-        vllm_trend = _change_against(_numeric_series(history, "vllm_last_day"), today, 30)
         pjm_trend = _change_against(_numeric_series(history, "pjm_overnight_mw"), today, 30)
     usage = _sign(signals.get("openrouter"), or_trend)
     # A live-versus-backfill price jump is labeled noisy above, so the prose
     # follows the 30-day median trend instead of that day-over-day score.
     price = _price_sign(signals, h100_trend, h200_trend, trust_score="dod vs backfill" not in notes)
+    avail = signals.get("vast_avail")
     sentences = []
+    if price == 1 and avail == 1:
+        sentences.append("가격은 오르고 대여 가능 대수는 줄어 공급이 빠듯하고 수요가 강한 모습입니다.")
+    elif price == -1 and avail == -1:
+        sentences.append("가격은 내리고 대여 가능 대수는 늘어 공급이 풀리는 모습입니다.")
     if usage is not None and price is not None and usage != 0 and price != 0:
         if usage > 0 and price > 0:
             sentences.append("사용량과 GPU 임대가격이 함께 오르고 있어 수요 우위 국면입니다.")
@@ -377,14 +404,8 @@ def _interpretation(view: DayView, score: Score, history: dict[date, dict[str, s
             sentences.append("사용량과 임대가격이 함께 내려 수요가 약해진 국면입니다.")
         else:
             sentences.append("사용량은 줄고 임대가격은 올라 공급이 빠듯한 모습입니다.")
-    pjm_up = _sign(signals.get("pjm"), pjm_trend) == 1 and month in WINTER_MONTHS
-    vllm_down = _sign(signals.get("vllm"), vllm_trend) == -1
-    if pjm_up and vllm_down:
-        sentences.append("PJM 상승은 11–2월 난방 수요의 영향일 수 있고, vLLM 감소는 배포 채널 변화일 수 있습니다.")
-    elif pjm_up:
+    if _sign(signals.get("pjm"), pjm_trend) == 1 and month in WINTER_MONTHS:
         sentences.append("PJM 야간부하 상승에는 11–2월 난방 수요가 섞여 있을 수 있습니다.")
-    elif vllm_down:
-        sentences.append("vLLM 다운로드 감소는 배포 채널이 바뀐 영향일 수 있습니다.")
     if not sentences:
         sentences.append("뚜렷한 수급 신호가 없어 추이를 더 지켜봅니다.")
     return "💡 해설: " + " ".join(sentences[:2])
