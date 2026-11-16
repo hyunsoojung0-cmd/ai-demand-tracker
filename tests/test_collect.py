@@ -1,7 +1,8 @@
+import logging
 from datetime import date
 from pathlib import Path
 
-from ai_demand.collect import build_notes, collect, main
+from ai_demand.collect import already_collected, build_notes, collect, main
 from ai_demand.config import HISTORY_COLUMNS
 from ai_demand.errors import SourceError
 from ai_demand.history import read_rows, upsert_rows
@@ -209,3 +210,84 @@ def test_all_sources_failing_exits_nonzero(tmp_path, monkeypatch, capsys):
         "pjm: request failed; openrouter: request failed; hf: request failed"
     )
     assert "데이터 없음 (요청 실패)" in capsys.readouterr().out
+
+
+def test_already_collected_matches_only_todays_kst_row(tmp_path):
+    missing = tmp_path / "missing.csv"
+    assert already_collected(missing, "2026-11-15") is False
+    empty = tmp_path / "empty.csv"
+    empty.write_text("", encoding="utf-8")
+    assert already_collected(empty, "2026-11-15") is False
+    broken = tmp_path / "broken.csv"
+    broken.write_text("not,the,header\n1,2,3\n", encoding="utf-8")
+    assert already_collected(broken, "2026-11-15") is False
+    path = tmp_path / "history.csv"
+    upsert_rows(path, [_blank("2026-11-14", notes="yesterday")])
+    assert already_collected(path, "2026-11-15") is False
+    assert already_collected(path, "") is False
+    upsert_rows(path, [_blank("2026-11-15", notes="today")])
+    assert already_collected(path, "2026-11-15") is True
+    assert already_collected(path, " 2026-11-15 ") is True
+
+
+def test_fallback_skips_collection_and_telegram_when_today_exists(tmp_path, monkeypatch, caplog):
+    def boom():
+        raise AssertionError("source fetched")
+
+    for name in ("fetch_spot", "fetch_vast", "fetch_pypi", "fetch_pjm", "fetch_openrouter", "fetch_huggingface"):
+        monkeypatch.setattr(f"ai_demand.collect.{name}", boom)
+
+    def _no_send(*_args, **_kwargs):
+        raise AssertionError("telegram sent")
+
+    monkeypatch.setattr("ai_demand.collect.send_telegram", _no_send)
+    monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("CHAT_ID", "chat")
+    path = tmp_path / "history.csv"
+    upsert_rows(path, [_blank("2026-11-15", overall="Stable", notes="kept")])
+    before = path.read_bytes()
+    with caplog.at_level(logging.INFO):
+        code = main(["--fallback", "--date", "2026-11-15", "--csv", str(path)])
+    assert code == 0
+    assert "already collected, skipping" in caplog.text
+    assert path.read_bytes() == before
+
+
+def test_fallback_collects_when_today_is_missing(tmp_path, monkeypatch, capsys):
+    _patch_success(monkeypatch)
+    path = tmp_path / "history.csv"
+    upsert_rows(path, [_blank("2026-11-14", notes="backfill", vast_h100_median="2")])
+    code = main(["--fallback", "--date", "2026-11-15", "--csv", str(path)])
+    assert code == 0
+    rows = read_rows(path)
+    assert [row["date_kst"] for row in rows] == ["2026-11-14", "2026-11-15"]
+    assert "[AI Demand Daily] 2026-11-15" in capsys.readouterr().out
+
+
+def test_primary_and_manual_still_collect_when_today_exists(tmp_path, monkeypatch, capsys):
+    _patch_success(monkeypatch)
+    path = tmp_path / "history.csv"
+    upsert_rows(path, [_blank("2026-11-15", notes="stale", vast_h100_median="1")])
+    code = main(["--date", "2026-11-15", "--csv", str(path)])
+    assert code == 0
+    assert read_rows(path)[-1]["notes"] != "stale"
+    assert "종합:" in capsys.readouterr().out
+
+    upsert_rows(path, [_blank("2026-11-15", notes="kept")])
+    before = path.read_bytes()
+    code = main(["--dry-run", "--date", "2026-11-15", "--csv", str(path)])
+    assert code == 0
+    assert path.read_bytes() == before
+    assert "[AI Demand Daily] 2026-11-15" in capsys.readouterr().out
+
+
+def test_daily_workflow_checks_the_fallback_cron_before_collecting():
+    text = Path(".github/workflows/daily.yml").read_text(encoding="utf-8")
+    assert 'cron: "45 22 * * *"' in text
+    assert 'cron: "15 0 * * *"' in text
+    assert "group: ai-demand-daily" in text
+    assert "cancel-in-progress: false" in text
+    assert "ref: main" in text
+    assert 'github.event.schedule' in text
+    assert '"15 0 * * *"' in text
+    assert "--fallback" in text

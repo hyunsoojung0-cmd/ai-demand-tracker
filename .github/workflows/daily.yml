@@ -4,6 +4,10 @@ on:
   schedule:
     # 07:45 KST. Korea does not observe daylight saving, so 22:45 UTC is always 07:45 KST.
     - cron: "45 22 * * *"
+    # 09:15 KST fallback when GitHub starts the 07:45 cron late. This trigger
+    # checks data/history.csv from the fresh main checkout and skips when
+    # today's KST row is already there.
+    - cron: "15 0 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -47,10 +51,15 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            python -m ai_demand --dry-run
+            set -- --dry-run
           else
-            python -m ai_demand
+            set --
           fi
+          # Only the 09:15 KST cron may skip. The 07:45 cron and manual runs always collect.
+          if [ "${{ github.event.schedule }}" = "15 0 * * *" ]; then
+            set -- "$@" --fallback
+          fi
+          python -m ai_demand "$@"
 
       - name: Commit data/history.csv
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
