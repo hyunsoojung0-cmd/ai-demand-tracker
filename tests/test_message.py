@@ -10,11 +10,11 @@ EXPECTED = """\
 1. OpenRouter 일일 토큰: 데이터 없음 (요청 실패)
 2. Vast.ai 중간 가격: H100 $2.67 (Δ +33.3%) · H200 $5.19 (Δ +48.3%) · B200 $10.31 (Δ +28.9%)
 3. Vast.ai 대여 가능: 데이터 없음 (요청 실패)
-4. AWS Spot 중단률: us-east-1 p5 (H100): 1단계 (<5%) · us-east-1 p4d (A100): 4단계 (15-20%) · us-west-2 p5 (H100): 1단계 (<5%) · us-west-2 p4d (A100): 5단계 (>20%)
-5. PJM 야간 기저부하: 데이터 없음 (EIA_API_KEY 없음)
-6. OpenRouter 가중 가격: 데이터 없음 (요청 실패)
+4. PJM 야간 기저부하: 데이터 없음 (EIA_API_KEY 없음)
+5. OpenRouter 가중 가격: 데이터 없음 (요청 실패)
+6. OpenRouter 추정 지출: 데이터 없음 (요청 실패)
 종합: Stable
-📝 판단 근거: 2개 지표 중 강세 1 · 중립 1 · 약세 0
+📝 판단 근거: 1개 지표 중 강세 1 · 중립 0 · 약세 0
    Vast 중간가 상승
 🔄 주요 변동: Vast H200 +48%, Vast H100 +33%, Vast B200 +29%
 💡 해설: 뚜렷한 수급 신호가 없어 추이를 더 지켜봅니다.
@@ -65,7 +65,6 @@ def test_message_matches_the_daily_layout_and_does_not_escape_labels():
     view = replace(view, overall=scored.verdict)
     text = render(view)
     assert text == EXPECTED
-    assert "<5%" in text
     assert "&lt;" not in text
     assert "**" not in text
 
@@ -94,16 +93,13 @@ def test_spot_lines_show_prior_day_and_week_ago_stages():
         overall="Stable",
     )
     text = render(view)
-    assert "us-east-1 p5 (H100): 1단계 (<5%) → (전일 동일, 7일전 1단계)" in text
-    assert "us-east-1 p4d (A100): 4단계 (15-20%) ↑ (전일 3단계, 7일전 2단계)" in text
-    assert "us-west-2 p5 (H100): 1단계 (<5%) ↓ (전일 2단계)" in text
-    assert "us-west-2 p4d (A100): 5단계 (>20%) → (전일 동일, 7일전 3단계)" in text
-    assert text.splitlines()[4].startswith("4. AWS Spot 중단률:")
+    assert "AWS Spot" not in text
+    assert "us-east-1 p5" not in text
 
 
 def test_spot_line_without_history_has_no_parenthetical():
     text = render(_snapshot(overall="Stable"))
-    assert "us-east-1 p4d (A100): 4단계 (15-20%)" in text
+    assert "AWS Spot" not in text
     assert "7일전" not in text
     assert "↑" not in text
 
@@ -120,7 +116,7 @@ def test_missing_spot_value_does_not_gain_a_history_suffix():
         spot_week={"spot_usw2_p5": 1},
         overall="Stable",
     )
-    assert "us-west-2 p5 (H100): 데이터 없음 (응답에 없음)" in render(view)
+    assert "AWS Spot" not in render(view)
 
 
 def test_openrouter_is_one_line_and_sheet_series_stay_out_of_the_message():
@@ -170,10 +166,10 @@ def test_pjm_line_shows_both_comparisons():
         overall="Stable",
     )
     text = render(view)
-    assert "5. PJM 야간 기저부하: 10,000 MW (전일 대비 +11.1%, 7일 평균 대비 +25.0%)" in text
+    assert "4. PJM 야간 기저부하: 10,000 MW (전일 대비 +11.1%, 7일 평균 대비 +25.0%)" in text
 
 
 def test_pjm_without_a_baseline_still_shows_the_megawatts():
     view = _snapshot(pjm_mw=85000, pjm_prev=None, pjm_ma=None, overall="Stable")
     text = render(view)
-    assert "5. PJM 야간 기저부하: 85,000 MW (전일 대비 데이터 없음, 7일 평균 대비 데이터 없음)" in text
+    assert "4. PJM 야간 기저부하: 85,000 MW (전일 대비 데이터 없음, 7일 평균 대비 데이터 없음)" in text

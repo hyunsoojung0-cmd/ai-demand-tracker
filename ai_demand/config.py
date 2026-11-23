@@ -27,6 +27,11 @@ PJM_VS_MA_DOWN = -0.01
 OR_VS_MA_UP = 0.05
 OR_VS_MA_DOWN = -0.05
 
+# Estimated same-day spend versus its 7-day average. Higher spend is demand.
+# The weighted token price itself is not scored.
+OR_SPEND_VS_MA_UP = 0.05
+OR_SPEND_VS_MA_DOWN = -0.05
+
 # Hugging Face is collected for the sheet and is not part of the verdict.
 HF_VS_MA_UP = 0.10
 HF_VS_MA_DOWN = -0.10

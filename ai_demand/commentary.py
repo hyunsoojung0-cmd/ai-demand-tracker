@@ -7,7 +7,7 @@ replaces the backfill row.
 
 from datetime import date, timedelta
 
-from ai_demand.config import SPOT_COLUMNS, WINDOW_DAYS
+from ai_demand.config import WINDOW_DAYS
 from ai_demand.model import DayView
 from ai_demand.score import Score, pct_change
 
@@ -20,8 +20,6 @@ WINTER_MONTHS = (11, 12, 1, 2)
 TELEGRAM_LIMIT = 4096
 
 _PUSH = {
-    ("spot", 1): "Spot 중단률 상승",
-    ("spot", -1): "Spot 중단률 하락",
     ("vast_price", 1): "Vast 중간가 상승",
     ("vast_price", -1): "Vast 중간가 하락",
     ("vast_avail", 1): "Vast 대여 가능 대수 감소",
@@ -30,8 +28,10 @@ _PUSH = {
     ("pjm", -1): "PJM 야간부하 7일 평균 하회",
     ("openrouter", 1): "OpenRouter 토큰 7일 평균 상회",
     ("openrouter", -1): "OpenRouter 토큰 7일 평균 하회",
+    ("or_spend", 1): "OpenRouter 추정 지출 7일 평균 상회",
+    ("or_spend", -1): "OpenRouter 추정 지출 7일 평균 하회",
 }
-_PHRASE_ORDER = ("openrouter", "vast_price", "vast_avail", "spot", "pjm")
+_PHRASE_ORDER = ("openrouter", "vast_price", "vast_avail", "pjm", "or_spend")
 _AVAIL_COLUMNS = ("vast_h100_avail", "vast_h200_avail", "vast_b200_avail")
 
 
@@ -85,6 +85,7 @@ def overlay_live(history: dict[date, dict[str, str]], view: DayView) -> dict[dat
     _put(row, "pjm_overnight_mw", view.pjm_mw)
     _put(row, "or_total_tokens", view.or_total)
     _put(row, "or_weighted_price", view.or_weighted_price)
+    _put(row, "or_est_spend_usd", view.or_est_spend_usd)
     _put(row, "hf_implied_daily", view.hf_implied)
     for key, quote in view.vast.items():
         if quote is not None and quote.median is not None:
@@ -229,6 +230,7 @@ def _moves(view: DayView, history: dict[date, dict[str, str]], notes: str) -> li
     if or_change is not None and abs(or_change) >= OR_DAY_SWING:
         or_note = "하루 변동이 큼"
     _add_move(found, "OpenRouter", or_change, or_note)
+    _add_move(found, "OpenRouter 지출", pct_change(view.or_est_spend_usd, view.or_spend_prev), "")
     found.sort(key=lambda item: (-abs(item[0]), item[1]))
     shown = [item[2] for item in found[:MOVE_LIMIT]]
     if not shown:
@@ -281,6 +283,18 @@ def _trend_lines(view: DayView, history: dict[date, dict[str, str]]) -> list[str
         )
         if line:
             body.append(line)
+    spend_series = _numeric_series(history, "or_est_spend_usd")
+    spend_level = moving_average(spend_series, today)
+    if spend_level is not None:
+        line = _trend_line(
+            "OpenRouter 지출",
+            spend_level,
+            lambda value: f"${value:,.0f}",
+            _change_against(spend_series, today, 30),
+            _change_against(spend_series, today, 90),
+        )
+        if line:
+            body.append(line)
     avail = _availability_total(history)
     avail_level = moving_average(avail, today)
     if avail_level is not None:
@@ -293,31 +307,10 @@ def _trend_lines(view: DayView, history: dict[date, dict[str, str]]) -> list[str
         )
         if line:
             body.append(line)
-    spot = _spot_trend(view)
-    if spot:
-        body.append("   " + spot)
     if not body:
         return []
     body[0] = "📈 추이: " + body[0].lstrip()
     return body
-
-
-def _spot_trend(view: DayView) -> str | None:
-    rose = fell = flat = 0
-    for column in SPOT_COLUMNS:
-        current = view.spot_values.get(column)
-        earlier = view.spot_week.get(column)
-        if current is None or earlier is None:
-            continue
-        if current > earlier:
-            rose += 1
-        elif current < earlier:
-            fell += 1
-        else:
-            flat += 1
-    if rose + fell + flat == 0:
-        return None
-    return f"Spot 중단률: 7일 전보다 상승 {rose} · 하락 {fell} · 보합 {flat}"
 
 
 def _availability_total(history: dict[date, dict[str, str]]) -> dict[date, float]:
@@ -433,6 +426,17 @@ def _token_price_comment(view: DayView) -> str | None:
     return None
 
 
+def _spend_comment(view: DayView, score: Score) -> str | None:
+    """Demand reading from the spend signal. The weighted price is separate."""
+    del view
+    signal = _signal_map(score).get("or_spend")
+    if signal == 1:
+        return "💬 추정 지출: 7일 평균을 웃돌아 토큰 수요가 커진 모습입니다."
+    if signal == -1:
+        return "💬 추정 지출: 7일 평균을 밑돌아 토큰 수요가 줄어든 모습입니다."
+    return None
+
+
 def build_commentary(
     view: DayView,
     score: Score,
@@ -449,6 +453,9 @@ def build_commentary(
         price_line = _token_price_comment(view)
         if price_line:
             lines.append(price_line)
+        spend_line = _spend_comment(view, score)
+        if spend_line:
+            lines.append(spend_line)
         return lines
     except Exception:
         return ["💡 해설: 해설을 만들지 못했습니다."]

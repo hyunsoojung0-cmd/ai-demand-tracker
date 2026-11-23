@@ -112,7 +112,8 @@ def test_collect_replaces_today_and_keeps_the_backfill_row(tmp_path, monkeypatch
     )
     assert collect(path, today=date(2026, 11, 15)) == 0
     message = capsys.readouterr().out
-    assert "us-east-1 p5 (H100): 1단계 (<5%)" in message
+    assert "AWS Spot" not in message
+    assert "us-east-1 p5" not in message
     assert "7일전" not in message
     assert "↑" not in message
     assert "H100 $2.67 (Δ +33.3%)" in message
@@ -179,11 +180,8 @@ def test_collect_message_compares_each_spot_with_prior_day_and_week(tmp_path, mo
     )
     assert collect(path, today=date(2026, 11, 15)) == 0
     message = capsys.readouterr().out
-    assert "us-east-1 p5 (H100): 1단계 (<5%) → (전일 동일, 7일전 1단계)" in message
-    assert "us-east-1 p4d (A100): 4단계 (15-20%) ↑ (전일 3단계, 7일전 2단계)" in message
-    assert "us-west-2 p5 (H100): 1단계 (<5%) ↓ (전일 2단계, 7일전 1단계)" in message
-    assert "us-west-2 p4d (A100): 5단계 (>20%) → (전일 동일, 7일전 3단계)" in message
-    # Per-line arrows disagree, but the four-bucket average is unchanged (1.75), so Spot stays 0.
+    assert "AWS Spot" not in message
+    assert "us-east-1" not in message
     assert "종합: Stable" in message
     rows = read_rows(path)
     assert [row["date_kst"] for row in rows] == ["2026-11-08", "2026-11-14", "2026-11-15"]

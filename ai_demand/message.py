@@ -106,9 +106,9 @@ def _avail_line(view: DayView) -> str:
 
 def _pjm_line(view: DayView) -> str:
     if view.pjm_mw is None:
-        return f"5. PJM 야간 기저부하: {_missing(view.pjm_reason)}"
+        return f"4. PJM 야간 기저부하: {_missing(view.pjm_reason)}"
     shown = f"{view.pjm_mw:,.0f} MW"
-    return f"5. PJM 야간 기저부하: {shown} ({_comparison_bits(view.pjm_mw, view.pjm_prev, view.pjm_ma)})"
+    return f"4. PJM 야간 기저부하: {shown} ({_comparison_bits(view.pjm_mw, view.pjm_prev, view.pjm_ma)})"
 
 
 def _billions(tokens: int) -> str:
@@ -148,11 +148,23 @@ def _coverage(frac: float) -> str:
 
 def _openrouter_price_line(view: DayView) -> str:
     if view.or_weighted_price is None or view.or_date is None:
-        return f"6. OpenRouter 가중 가격: {_missing(view.or_price_reason)}"
+        return f"5. OpenRouter 가중 가격: {_missing(view.or_price_reason)}"
     label = f"{view.or_date.month}/{view.or_date.day} UTC"
     compared = _comparison_bits(view.or_weighted_price, view.or_weighted_prev, view.or_weighted_ma)
     coverage = "" if view.or_price_coverage is None else f", {_coverage(view.or_price_coverage)}"
-    return f"6. OpenRouter 가중 가격: {_price_per_million(view.or_weighted_price)} ({label}, {compared}{coverage})"
+    return f"5. OpenRouter 가중 가격: {_price_per_million(view.or_weighted_price)} ({label}, {compared}{coverage})"
+
+
+def _spend(value: float) -> str:
+    return f"${value:,.0f}" if abs(value) >= 100 else f"${value:,.2f}"
+
+
+def _spend_line(view: DayView) -> str:
+    if view.or_est_spend_usd is None or view.or_date is None:
+        return f"6. OpenRouter 추정 지출: {_missing(view.or_price_reason)}"
+    label = f"{view.or_date.month}/{view.or_date.day} UTC"
+    compared = _comparison_bits(view.or_est_spend_usd, view.or_spend_prev, view.or_spend_ma)
+    return f"6. OpenRouter 추정 지출: {_spend(view.or_est_spend_usd)} ({label}, {compared})"
 
 
 def _score_for(view: DayView, score: Score | None) -> Score:
@@ -173,9 +185,9 @@ def render(
         _openrouter_line(view),
         _vast_price_line(view),
         _avail_line(view),
-        _spot_line(view),
         _pjm_line(view),
         _openrouter_price_line(view),
+        _spend_line(view),
         f"종합: {view.overall}",
     ]
     lines.extend(build_commentary(view, _score_for(view, score), history, notes))

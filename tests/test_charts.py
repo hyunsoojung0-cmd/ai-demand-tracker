@@ -41,16 +41,16 @@ def test_dashboard_charts_are_pngs_and_short_series_are_skipped(tmp_path):
         "openrouter.png",
         "vast_price.png",
         "vast_avail.png",
-        "spot.png",
         "pjm.png",
     ]
+    assert "spot.png" not in {item.path.name for item in made}
     for item in made:
         data = item.path.read_bytes()
         assert data.startswith(b"\x89PNG\r\n\x1a\n")
         assert len(data) > 3000
 
 
-def test_availability_and_spot_charts_wait_for_two_days(tmp_path):
+def test_availability_chart_waits_for_two_days_and_spot_is_not_drawn(tmp_path):
     day = date(2026, 11, 16)
     rows = [
         {
@@ -64,6 +64,7 @@ def test_availability_and_spot_charts_wait_for_two_days(tmp_path):
     ]
     names = {item.path.name for item in render_charts(merge_history(rows, []), tmp_path, day, days=10, korean=False)}
     assert names == {"openrouter.png", "vast_price.png", "pjm.png"}
+    assert "spot.png" not in names
 
 
 def test_weighted_price_chart_waits_for_two_days(tmp_path):
@@ -77,6 +78,20 @@ def test_weighted_price_chart_waits_for_two_days(tmp_path):
     ]
     made = render_charts(merge_history(two, []), tmp_path / "two", day, days=10, korean=False)
     assert "or_price.png" in {item.path.name for item in made}
+    spend_rows = [
+        {"date_kst": (day - timedelta(days=1)).isoformat(), "or_est_spend_usd": "100"},
+        {"date_kst": day.isoformat(), "or_est_spend_usd": "120"},
+    ]
+    spend = render_charts(merge_history(spend_rows, []), tmp_path / "spend", day, days=10, korean=False)
+    assert "or_spend.png" in {item.path.name for item in spend}
+    one_spend = render_charts(
+        merge_history([{"date_kst": day.isoformat(), "or_est_spend_usd": "120"}], []),
+        tmp_path / "spend-one",
+        day,
+        days=10,
+        korean=False,
+    )
+    assert "or_spend.png" not in {item.path.name for item in one_spend}
 
 
 def test_empty_history_writes_no_charts(tmp_path):

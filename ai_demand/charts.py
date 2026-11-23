@@ -149,9 +149,9 @@ def render_charts(
         _openrouter_chart,
         _vast_price_chart,
         _availability_chart,
-        _spot_chart,
         _pjm_chart,
         _or_price_chart,
+        _spend_chart,
     )
     for builder in builders:
         item = builder(merged, dest, end, days, use_korean)
@@ -276,6 +276,32 @@ def _availability_chart(merged, dest, end, days, korean) -> ChartFile | None:
     )
 
 
+def _spend_chart(merged, dest, end, days, korean) -> ChartFile | None:
+    full_dates, full_spend = aligned_values(merged, end, "or_est_spend_usd", days, lookback=WINDOW_DAYS - 1)
+    full_ma = _trailing_ma(full_spend)
+    offset = WINDOW_DAYS - 1
+    dates = full_dates[offset:]
+    spend = full_spend[offset:]
+    average = full_ma[offset:]
+    points = sum(value is not None for value in spend)
+    if points < MIN_SERIES_DAYS:
+        log.info("spend chart skipped (%s day(s))", points)
+        return None
+    title, subtitle = _copy(korean, "spend")
+    daily, ma_label = ("일일", "7일 평균") if korean else ("daily", "7-day")
+    return _draw(
+        dest / "or_spend.png",
+        title,
+        subtitle,
+        [
+            (dates, spend, daily, _BLUE, "-"),
+            (dates, average, ma_label, _AMBER, "--"),
+        ],
+        lambda value: f"${value:,.0f}",
+        caption=title,
+    )
+
+
 def _spot_chart(merged, dest, end, days, korean) -> ChartFile | None:
     groups = []
     series = []
@@ -337,6 +363,10 @@ def _copy(korean: bool, kind: str) -> tuple[str, str]:
         "or_price": (
             ("OpenRouter 가중 가격", "USD/1M 토큰 · 입력 3 : 출력 1 · 최근 90일"),
             ("OpenRouter weighted price", "USD per 1M tokens · 3:1 prompt:completion · last 90 days"),
+        ),
+        "spend": (
+            ("OpenRouter 추정 지출", "달러 · 그날 토큰 × 가중 가격 / 1,000,000 · 최근 90일"),
+            ("OpenRouter estimated spend", "USD · same-day tokens x weighted price / 1,000,000 · last 90 days"),
         ),
         "vast_price": (
             ("Vast.ai 중간 가격", "달러/시간 · 최근 90일 · 백필 일일 중간값에서 실시간 중간값으로 이어짐"),

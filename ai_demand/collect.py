@@ -28,7 +28,6 @@ from ai_demand.history import (
     DEFAULT_CSV,
     parse_optional_float,
     previous_row,
-    previous_spots,
     read_rows,
     row_from_view,
     row_on_or_before,
@@ -314,7 +313,7 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
             vast_avail_reason="응답에 없음",
         )
     # Spot score uses the same previous row as the ↑/↓ arrow: the average of its r values.
-    scored = score_view(view, previous_spots(previous))
+    scored = score_view(view)
     view = replace(view, overall=scored.verdict)
     log.info(
         "score total=%s verdict=%s signals=%s",
@@ -385,7 +384,7 @@ def _apply_openrouter_prices(view, reading, catalog, price_exc, previous, rows, 
     log.info("flagship usd/1M gpt=%s claude=%s gemini=%s", gpt, claude, gemini)
     missing = [name for name, value in (("gpt", gpt), ("claude", claude), ("gemini", gemini)) if value is None]
     note = None if not missing else "openrouter_price: flagship missing " + ",".join(missing)
-    quote = None if reading is None else price_usage(reading.model_tokens, catalog)
+    quote = None if reading is None else price_usage(reading.model_tokens, catalog, day_tokens=reading.total_tokens)
     if quote is None:
         reason = view.or_reason if reading is None else "매칭 없음"
         return (
@@ -399,6 +398,7 @@ def _apply_openrouter_prices(view, reading, catalog, price_exc, previous, rows, 
             note,
         )
     previous_price = None if previous is None else parse_optional_float(previous.get("or_weighted_price"))
+    previous_spend = None if previous is None else parse_optional_float(previous.get("or_est_spend_usd"))
     log.info(
         "or weighted price=%s coverage=%s spend=%s flagships=%s/%s/%s",
         f"{quote.usd_per_million:.4f}",
@@ -413,9 +413,11 @@ def _apply_openrouter_prices(view, reading, catalog, price_exc, previous, rows, 
             view,
             or_weighted_price=quote.usd_per_million,
             or_weighted_prev=previous_price,
-            or_weighted_ma=_weighted_price_ma(rows, today, quote.usd_per_million),
+            or_weighted_ma=_column_ma(rows, today, "or_weighted_price", quote.usd_per_million),
             or_price_coverage=quote.coverage,
             or_est_spend_usd=quote.spend_usd,
+            or_spend_prev=previous_spend,
+            or_spend_ma=_column_ma(rows, today, "or_est_spend_usd", quote.spend_usd),
             or_price_gpt=gpt,
             or_price_claude=claude,
             or_price_gemini=gemini,
@@ -425,14 +427,15 @@ def _apply_openrouter_prices(view, reading, catalog, price_exc, previous, rows, 
     )
 
 
-def _weighted_price_ma(rows: list[dict[str, str]], today: date, current: float) -> float | None:
+def _column_ma(rows: list[dict[str, str]], today: date, column: str, current: float) -> float | None:
+    """Contiguous 7-day mean of one CSV column, including today's value."""
     series: dict[date, float] = {}
     today_text = today.isoformat()
     for row in rows:
         raw_day = row.get("date_kst") or ""
         if raw_day >= today_text:
             continue
-        value = parse_optional_float(row.get("or_weighted_price"))
+        value = parse_optional_float(row.get(column))
         if value is None:
             continue
         try:

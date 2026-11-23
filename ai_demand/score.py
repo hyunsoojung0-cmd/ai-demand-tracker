@@ -3,26 +3,25 @@
 Thresholds live at the top of ``ai_demand.config``. Unavailable signals are
 left out of the sum. A present signal that sits inside its band contributes 0.
 
-The verdict uses five indicators. vLLM and Hugging Face are still collected
-for the sheet and are not scored.
-
-Spot is one signal. Its raw score adds +1 when the average bucket is at or
-above ``SPOT_HIGH_BUCKET`` or the average rose versus the previous CSV row,
-and -1 when the average is at or below ``SPOT_LOW_BUCKET`` or it fell. The
-two directions cancel when both fire, and the result is clamped to +1, 0, or
--1 so Spot cannot outweigh the other indicators.
+The verdict uses five indicators. vLLM, Hugging Face, AWS Spot, and the
+OpenRouter weighted token price are collected for the sheet. Spot is not
+scored. The weighted price is not scored. Estimated spend takes Spot's place:
+same-day spend versus its 7-day average, with higher spend meaning demand.
 
 Vast price is one signal: the mean of the H100 and H200 day-over-day median
 changes. B200 is not scored. Vast availability is one signal on the sum of
 rentable machines. A drop is +1 (tighter supply) and a rise is -1. PJM
 compares the overnight mean with the 7-night average. OpenRouter compares
-the completed day's total tokens with its 7-day average. Boundaries are
+the completed day's total tokens with its 7-day average. Estimated spend
+uses the same ±5% band against its own 7-day average. Boundaries are
 strict: a change equal to the threshold scores 0.
 """
 
 from dataclasses import dataclass
 
 from ai_demand.config import (
+    OR_SPEND_VS_MA_DOWN,
+    OR_SPEND_VS_MA_UP,
     OR_VS_MA_DOWN,
     OR_VS_MA_UP,
     PJM_VS_MA_DOWN,
@@ -144,11 +143,14 @@ def vast_avail_signal(current: dict[str, int | None] | None, previous: dict[str,
     return -raw
 
 
-def score_view(view: DayView, previous_spots: list[int] | None) -> Score:
+def score_view(view: DayView, previous_spots: list[int] | None = None) -> Score:
+    """Score the five verdict indicators. ``previous_spots`` is ignored.
+
+    Spot stays on the sheet and is no longer a signal. Estimated spend
+    replaces it. The weighted token price is not a signal.
+    """
+    del previous_spots
     parts: list[Signal] = []
-    spot = spot_signal(present_spots(view.spot_values), previous_spots)
-    if spot is not None:
-        parts.append(Signal("spot", spot))
     price = vast_price_signal(view)
     if price is not None:
         parts.append(Signal("vast_price", price))
@@ -161,5 +163,8 @@ def score_view(view: DayView, previous_spots: list[int] | None) -> Score:
     openrouter = band_signal(view.or_total, view.or_ma, OR_VS_MA_UP, OR_VS_MA_DOWN)
     if openrouter is not None:
         parts.append(Signal("openrouter", openrouter))
+    spend = band_signal(view.or_est_spend_usd, view.or_spend_ma, OR_SPEND_VS_MA_UP, OR_SPEND_VS_MA_DOWN)
+    if spend is not None:
+        parts.append(Signal("or_spend", spend))
     total = sum(part.value for part in parts)
     return Score(total=total, verdict=verdict_name(total), signals=tuple(parts))

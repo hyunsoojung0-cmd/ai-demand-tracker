@@ -48,6 +48,8 @@ class DayView:
     or_weighted_ma: float | None = None
     or_price_coverage: float | None = None
     or_est_spend_usd: float | None = None
+    or_spend_prev: float | None = None
+    or_spend_ma: float | None = None
     or_price_gpt: float | None = None
     or_price_claude: float | None = None
     or_price_gemini: float | None = None

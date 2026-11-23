@@ -131,8 +131,30 @@ def match_usd_per_million(slug: str, catalog: dict[str, ModelPrice]) -> float | 
     return blended_usd_per_million(quote.prompt, quote.completion)
 
 
-def price_usage(rows: tuple[tuple[str, int], ...] | list[tuple[str, int]], catalog: dict[str, ModelPrice]) -> UsagePrice | None:
-    """Weight the completed day's rows. ``other`` lowers coverage and is not priced."""
+def estimated_spend_usd(total_tokens: int, usd_per_million: float) -> float:
+    """USD for one completed UTC day.
+
+    ``total_tokens`` is that day's OpenRouter total (prompt + completion,
+    including ``other``). ``usd_per_million`` is that same day's
+    usage-weighted blended price in USD per 1,000,000 tokens. A weekly total
+    is never substituted.
+
+    spend = total_tokens × usd_per_million / 1_000_000
+    """
+    return total_tokens * usd_per_million / 1_000_000
+
+
+def price_usage(
+    rows: tuple[tuple[str, int], ...] | list[tuple[str, int]],
+    catalog: dict[str, ModelPrice],
+    *,
+    day_tokens: int | None = None,
+) -> UsagePrice | None:
+    """Weight one completed day's rows. ``other`` lowers coverage and is not priced.
+
+    ``day_tokens`` is that day's total when the caller already has it. It must
+    be the same day as ``rows``. When omitted, the sum of ``rows`` is the total.
+    """
     total = 0
     matched = 0
     weighted = 0.0
@@ -148,10 +170,11 @@ def price_usage(rows: tuple[tuple[str, int], ...] | list[tuple[str, int]], catal
     if total <= 0 or matched <= 0:
         return None
     per_million = weighted / matched
+    spend_tokens = total if day_tokens is None else day_tokens
     return UsagePrice(
         usd_per_million=per_million,
         coverage=matched / total,
-        spend_usd=total * per_million / 1_000_000,
+        spend_usd=estimated_spend_usd(spend_tokens, per_million),
     )
 
 

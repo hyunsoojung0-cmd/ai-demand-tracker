@@ -6,6 +6,7 @@ from ai_demand.openrouter import parse_openrouter
 from ai_demand.openrouter_price import (
     ModelPrice,
     blended_usd_per_million,
+    estimated_spend_usd,
     flagship_usd_per_million,
     match_usd_per_million,
     parse_models,
@@ -47,7 +48,11 @@ def test_weighted_price_covers_matched_tokens_and_prices_the_whole_day():
     assert priced is not None
     assert priced.usd_per_million == pytest.approx(3)  # (50*6 + 50*0) / 100
     assert priced.coverage == pytest.approx(100 / 125)
-    assert priced.spend_usd == pytest.approx(125 * 3 / 1_000_000)
+    assert priced.spend_usd == pytest.approx(estimated_spend_usd(125, 3))
+    # Same-day total only. A weekly figure passed explicitly replaces the row sum.
+    weekly = price_usage(rows, catalog, day_tokens=125 * 7)
+    assert weekly.spend_usd == pytest.approx(estimated_spend_usd(125 * 7, 3))
+    assert price_usage(rows, catalog).spend_usd == pytest.approx(estimated_spend_usd(125, priced.usd_per_million))
 
 
 def test_flagship_uses_the_first_configured_id():
@@ -106,6 +111,27 @@ def test_weighted_price_does_not_change_the_verdict():
         or_weighted_price=1.5,
         or_weighted_prev=3.0,
     )
-    names = [part.name for part in score_view(view, [2, 2, 2, 2]).signals]
-    assert names == ["spot", "openrouter"]
+    names = [part.name for part in score_view(view).signals]
+    assert names == ["openrouter"]
     assert "or_weighted_price" not in names
+    assert "spot" not in names
+    spend = score_view(DayView(
+        date_kst="2026-11-15",
+        spot_values={},
+        spot_labels={},
+        spot_reason="",
+        vast={},
+        vast_prev={},
+        vast_reason="",
+        vllm_last_day=None,
+        vllm_ma=None,
+        vllm_reason="",
+        pjm_mw=None,
+        pjm_prev=None,
+        pjm_ma=None,
+        pjm_reason="",
+        or_est_spend_usd=110,
+        or_spend_ma=100,
+        or_weighted_price=9,
+    ))
+    assert [part.name for part in spend.signals] == ["or_spend"]

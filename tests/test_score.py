@@ -124,10 +124,24 @@ def test_two_up_signals_are_strong_even_when_others_are_missing():
         pjm_mw=None,
         pjm_ma=None,
     )
-    scored = score_view(view, None)
+    scored = score_view(view)
+    assert scored.total == 1
+    assert scored.verdict == "Stable"
+    assert "spot" not in {part.name for part in scored.signals}
+    spend = _view(
+        or_est_spend_usd=120,
+        or_spend_ma=100,
+        vast={"h100": VastQuote(1, 3), "h200": VastQuote(None, None), "b200": VastQuote(None, None)},
+        vast_prev={"h100": 2, "h200": None, "b200": None},
+        vllm_last_day=None,
+        pjm_mw=None,
+        pjm_ma=None,
+    )
+    scored = score_view(spend)
     assert scored.total == 2
     assert scored.verdict == "Strong"
-    assert "vast_b200" not in {part.name for part in scored.signals}
+    assert "or_spend" in {part.name for part in scored.signals}
+    assert "spot" not in {part.name for part in scored.signals}
 
 
 def test_neutral_present_signals_stay_stable():
@@ -140,7 +154,8 @@ def test_neutral_present_signals_stay_stable():
         }
     )
     scored = score_view(view, [2, 2, 2, 2])
-    assert [part.value for part in scored.signals] == [0, 0, 0]
+    assert [part.value for part in scored.signals] == [0, 0]
+    assert "spot" not in {part.name for part in scored.signals}
     assert scored.verdict == "Stable"
 
 
@@ -175,9 +190,9 @@ def test_live_shaped_snapshot_is_stable():
     )
     scored = score_view(view, None)
     assert [(part.name, part.value) for part in scored.signals] == [
-        ("spot", 0),
         ("vast_price", 1),
     ]
+    assert "spot" not in {part.name for part in scored.signals}
     assert scored.verdict == "Stable"
 
 
