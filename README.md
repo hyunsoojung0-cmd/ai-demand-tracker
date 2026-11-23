@@ -1,6 +1,6 @@
 # AI 인프라 수요 일일 트래커
 
-매일 아침 지표를 모아 `data/history.csv`에 한 줄을 추가합니다. 텔레그램에는 핵심 다섯 지표의 숫자와 해설을 보내고, 이어서 같은 다섯 지표의 차트를 앨범으로 보냅니다. vLLM과 Hugging Face는 시트용으로 CSV에만 남고 메시지·점수·차트에는 넣지 않습니다. 시트 반영은 이 저장소가 하지 않습니다. 다른 작업이 아침마다 CSV의 최신 행을 구글 시트에 복사합니다.
+매일 아침 지표를 모아 `data/history.csv`에 한 줄을 추가합니다. 텔레그램에는 핵심 여섯 지표의 숫자와 해설을 보내고, 이어서 같은 지표의 차트를 앨범으로 보냅니다. vLLM, Hugging Face, AWS Spot 중단률은 시트용으로 CSV에만 남고 메시지와 차트에는 넣지 않습니다. Spot은 종합 점수에도 넣지 않습니다. 시트 반영은 이 저장소가 하지 않습니다. 다른 작업이 아침마다 CSV의 최신 행을 구글 시트에 복사합니다.
 
 시트: https://docs.google.com/spreadsheets/d/1YV2uuLIqz7WhhuznL0yOGSBVkljz0M46WCt2vk7Wj5A/edit
 
@@ -73,7 +73,7 @@ python -m ai_demand
 | us-west-2 `p5.48xlarge` (H100) | `spot_usw2_p5` |
 | us-west-2 `p4d.24xlarge` (A100) | `spot_usw2_p4d` |
 
-CSV에는 `r` 원값(0–4)을 넣고, 메시지에는 `{r+1}단계 ({라벨})`로 보여 줍니다. 직전 CSV 행의 같은 칸과 비교해 화살표를 붙입니다. `r`가 오르면 ↑(중단 증가), 내리면 ↓, 같으면 → 이고 괄호 안은 `전일 동일`입니다. 값이 달라졌으면 `전일 N단계`로 적습니다. 7일 전 날짜 또는 그 이전에서 가장 가까운 행에 값이 있으면 `7일전 N단계`를 쉼표로 이어 붙입니다. 그 칸이 비어 있으면 그 비교만 생략하고, 더 오래된 행으로 내려가지 않습니다. 둘 다 없으면 괄호 전체를 생략합니다. 백필 행의 Spot 칸은 비어 있으므로 7일 비교는 실측이 쌓인 뒤에 나타납니다. 종합 점수는 메시지 화살표가 아니라 네 개 `r` 평균이 같은 직전 행보다 올랐는지를 그대로 사용합니다.
+CSV에는 `r` 원값(0–4)을 넣습니다. 이 값은 시트에만 두고 텔레그램 숫자, 해설, 차트, 종합 점수에는 넣지 않습니다.
 
 ### 2. Vast.ai 가격
 
@@ -122,6 +122,22 @@ Source: OpenRouter (CC BY 4.0)
 
 데이터셋은 CC BY 4.0입니다. 재사용할 때는 OpenRouter를 출처로 밝혀야 합니다. 문서: <https://openrouter.ai/docs/api/api-reference/datasets/daily-token-totals-for-top-50-models>. 순위 원본은 <https://openrouter.ai/rankings>입니다.
 
+### 6b. OpenRouter 토큰 가격
+
+가격표는 키 없는 <https://openrouter.ai/api/v1/models> 입니다. `pricing.prompt`와 `pricing.completion`은 토큰당 달러입니다. 순위 데이터는 입력·출력 토큰을 나누지 않고 `total_tokens`만 주므로, 모델별 가격은 `(3 × prompt + 1 × completion) / 4`를 1M 토큰당 달러로 바꾼 값입니다.
+
+그날 상위 모델의 토큰으로 가중 평균을 내 `or_weighted_price`에 넣습니다. `other`와 가격표에 없는 모델은 평균에서 빠지고, `or_price_coverage`는 가격을 매긴 토큰을 그날 전체 토큰(other 포함)으로 나눈 비율입니다. `:free`는 0달러입니다. 슬러그는 `id`, `canonical_slug`, `:extended` 같은 접미사, 끝의 `-YYYYMMDD`를 맞춰 찾습니다.
+
+메시지 5번 줄에 전일 CSV와 7일 평균 대비를 적습니다. 가격 이력은 오늘부터라 처음에는 비교가 비고, 차트가 그려지는 것도 2일째부터입니다. 가격이 내리고 토큰이 늘면 해설에 더 싼 모델로 수요가 옮겨 간다는 한 줄을 붙입니다. 가중 가격은 종합 점수에 넣지 않습니다.
+
+`or_est_spend_usd`는 같은 날의 OpenRouter 전체 토큰에 그 가중 가격을 곱한 추정액입니다. 단위는 달러이고, 주간 합계는 쓰지 않습니다.
+
+```
+or_est_spend_usd = 그날 total_tokens × or_weighted_price / 1,000,000
+```
+
+`or_weighted_price`는 1M 토큰당 달러입니다. 이 지출은 메시지 6번 줄, 전일·7일 비교, 해설, 차트(2일 이상)에 나옵니다. 종합 점수에서는 Spot 자리를 대신해, 7일 평균보다 5%를 넘으면 +1, 5%보다 낮으면 -1입니다. 7일 평균이 없으면 점수에 넣지 않습니다. `or_price_gpt`, `or_price_claude`, `or_price_gemini`는 시트 전용이며, `config.py`의 목록에서 카탈로그에 있는 첫 id의 같은 3:1 혼합가입니다. 가격표 호출이 실패해도 수집은 계속되고 notes에 남습니다. 과거 가격은 백필하지 않습니다.
+
 ### 7. Hugging Face 오픈 모델 다운로드
 
 고정된 공식 플래그십 13개입니다. `gpt2`는 넣지 않습니다. 목록은 `ai_demand/config.py`의 `HF_BASKET`입니다. 모델마다 `https://huggingface.co/api/models/{id}?expand[]=downloads&expand[]=downloadsAllTime`를 호출합니다. `downloads`는 최근 30일, `downloadsAllTime`은 누적입니다. `HF_TOKEN`이 있으면 그 헤더만 추가합니다.
@@ -130,33 +146,32 @@ Source: OpenRouter (CC BY 4.0)
 
 ## 차트
 
-텍스트를 보낸 뒤 같은 다섯 지표를 PNG 앨범으로 보냅니다. 최근 90일이고, 빈 날은 선을 끊습니다. `data/history.csv`와 `data/backfill_6m.csv`를 날짜로 합치며, 일일 파일의 값이 있으면 그 값을 씁니다.
+텍스트를 보낸 뒤 핵심 지표를 PNG 앨범으로 보냅니다. 최근 90일이고, 빈 날은 선을 끊습니다. `data/history.csv`와 `data/backfill_6m.csv`를 날짜로 합치며, 일일 파일의 값이 있으면 그 값을 씁니다.
 
 1. OpenRouter 일일 토큰과 7일 평균. 단위는 조(T)입니다.
 2. Vast.ai H100·H200·B200 중간 가격. 백필 일일 중간값에서 실시간 중간값으로 이어집니다.
 3. Vast.ai 대여 가능 머신. 관측이 2일 이상일 때만 그립니다.
-4. AWS Spot 중단률 1–5단계. 네 줄을 계단 그래프로 그리고, 2일 이상일 때만 그립니다.
-5. PJM 야간 기저부하와 7밤 평균.
+4. PJM 야간 기저부하와 7밤 평균.
+5. OpenRouter 가중 가격($/1M 토큰)과 7일 평균. 관측이 2일 이상일 때만 그립니다.
+6. OpenRouter 추정 지출(달러)과 7일 평균. 관측이 2일 이상일 때만 그립니다. AWS Spot 차트는 만들지 않습니다.
 
 각 선의 오른쪽 끝에 최신 값을 적습니다. 한글은 워크플로에서 `fonts-nanum`을 설치해 쓰고, 글꼴이 없으면 영어 라벨로 그립니다. 차트를 만들거나 보내는 데 실패해도 텍스트 메시지는 그대로 둡니다. 드라이런은 `charts/*.png`를 아티팩트 `daily-charts`로 올리고 텔레그램으로는 보내지 않습니다. 09:15 보조 실행이 이미 수집된 날을 건너뛰면 차트도 만들지 않습니다.
 
 ## 종합 판정
 
-메시지와 같은 다섯 지표만 점수를 냅니다. 데이터가 있는 신호만 더합니다. 결측 신호는 합계에 포함하지 않습니다. vLLM과 Hugging Face는 수집만 하고 점수에 넣지 않습니다.
+점수는 다섯 지표입니다. OpenRouter 가중 가격과 AWS Spot은 점수에 넣지 않습니다. 추정 지출이 Spot 자리를 대신합니다. 데이터가 있는 신호만 더합니다. 결측 신호는 합계에 포함하지 않습니다. vLLM과 Hugging Face는 수집만 하고 점수에 넣지 않습니다.
 
 | 신호 | +1 | -1 |
 | --- | --- | --- |
 | OpenRouter 전체 토큰 대 7일 평균 | > +5% | < −5% |
 | Vast 중간가. H100·H200 전일 대비의 평균. B200은 제외 | > +3% | < −3% |
 | Vast 대여 가능 대수 합의 전일 대비 | 감소가 5%를 넘음 | 증가가 5%를 넘음 |
-| Spot 4개 `r`의 평균 | 평균 ≥ 3 **또는** 전일 CSV 평균보다 상승 | 평균 ≤ 1 **또는** 전일보다 하락 |
 | PJM 야간 평균 대 7밤 평균 | > +1% | < −1% |
+| OpenRouter 추정 지출 대 7일 평균 | > +5% | < −5% |
 
 대여 가능 대수는 H100·H200·B200을 더합니다. 어제와 오늘이 둘 다 있는 GPU만 합에 넣습니다. 대수가 줄면 공급이 빠듯한 쪽으로 +1, 늘면 −1입니다. 첫날처럼 전일 값이 없으면 이 신호는 빼니다. B200 가격은 메시지와 CSV에만 나오고 가격 점수에는 넣지 않습니다. 경계값(정확히 +3%, +5%, +1%)은 0점입니다.
 
-Spot은 신호 하나입니다. 위 두 조건이 동시에 서로 다른 방향이면 상쇄되어 0이고, 같은 방향이 겹쳐도 +1 또는 -1을 넘지 않습니다. 전일 Spot 값이 없으면(백필 행) 수준만 봅니다. 평균이 1과 3 사이이고 방향이 없으면 0입니다. H100은 한가하고 A100은 빡빡한 날처럼 네 값이 갈리면 평균이 가운데로 모여 0이 될 수 있습니다.
-
-합이 2 이상이면 `Strong`, -2 이하면 `Softening`, 그 외에는 `Stable`입니다.
+합이 2 이상이면 `Strong`, -2 이하면 `Softening`, 그 외에는 `Stable`입니다. 추정 지출의 7일 평균이 생기기 전에는 그 신호를 빼니다.
 
 종합 줄 아래에는 규칙으로 만든 짧은 해설이 붙습니다. 판단 근거는 강세·중립·약세 개수이고, 주요 변동은 전일 대비가 큰 항목입니다. Vast를 백필 일별 중간값과 비교한 날에는 `백필 일별값과 비교`를 붙이고, 그 등락은 해설의 가격 방향에서 뺀 뒤 30일 추이를 봅니다. OpenRouter 하루 변동이 15% 이상이면 `하루 변동이 큼`을 붙입니다. 추이는 `history.csv`와 `backfill_6m.csv`를 날짜로 합친 뒤(같은 칸에 값이 있으면 일일 파일이 이기고, 빈 칸은 백필을 지우지 않음) 7일 평균을 30일 전·90일 전과 비교합니다. 재료가 없는 문장은 생략합니다.
 
@@ -165,7 +180,7 @@ Spot은 신호 하나입니다. 위 두 조건이 동시에 서로 다른 방향
 `data/history.csv` 헤더는 아래 순서를 유지합니다. 빈 칸은 결측입니다. 같은 `date_kst`가 있으면 그 행을 교체합니다.
 
 ```
-date_kst,spot_use1_p5,spot_use1_p4d,spot_usw2_p5,spot_usw2_p4d,vast_h100_min,vast_h100_median,vast_h200_min,vast_h200_median,vast_b200_min,vast_b200_median,vllm_last_day,vllm_7d_ma,pjm_overnight_mw,pjm_overnight_7d_ma,overall,notes,or_total_tokens,or_top5_share,or_top1_model,hf_basket_30d,hf_basket_alltime,hf_implied_daily,vast_h100_avail,vast_h200_avail,vast_b200_avail
+date_kst,spot_use1_p5,spot_use1_p4d,spot_usw2_p5,spot_usw2_p4d,vast_h100_min,vast_h100_median,vast_h200_min,vast_h200_median,vast_b200_min,vast_b200_median,vllm_last_day,vllm_7d_ma,pjm_overnight_mw,pjm_overnight_7d_ma,overall,notes,or_total_tokens,or_top5_share,or_top1_model,hf_basket_30d,hf_basket_alltime,hf_implied_daily,vast_h100_avail,vast_h200_avail,vast_b200_avail,or_weighted_price,or_price_coverage,or_est_spend_usd,or_price_gpt,or_price_claude,or_price_gemini
 ```
 
 `date_kst`는 수집 시점의 한국 날짜입니다. 가격과 `or_top5_share`는 소수점 넷째 자리, 평균은 둘째 자리까지 반올림한 뒤 끝의 0을 뺍니다. `notes`는 세미콜론으로 이은 짧은 오류·정보입니다. 정상이면 비어 있습니다. OpenRouter, Hugging Face, Vast 가용 대수 열은 헤더 끝에만 붙입니다. 예전 행은 그 칸이 비어 있습니다. `vast_*_avail`은 그날 대여 가능한 머신 수이고, 백필하지 않습니다.
@@ -190,7 +205,7 @@ Actions의 **6개월 백필** 워크플로는 수동 실행만 됩니다. `data/
 | Vast `vast_*_median` | 공개 피드 `daily[]` 중간값만. 최저가는 비웁니다. 2026-11-15 기준 피드는 최근 90일(2026-08-17~2026-11-14)만 보관합니다 |
 | PJM `pjm_overnight_mw`, `pjm_overnight_7d_ma` | EIA 시간별 PJM 수요. 일일 수집과 같이 `length=240`, 내림차순, 같은 facet으로 최대 7일씩 요청합니다. 한 주가 시간 초과되어도 그 주만 건너뛰고 나머지는 남깁니다. `start`/`end`는 `YYYY-MM-DDTHH`입니다. 야간은 미동부 00:00–05:00 평균이고, 7밤 평균은 그날까지의 완전한 밤 7개입니다. 키가 없으면 비웁니다 |
 | OpenRouter `or_total_tokens`, `or_top5_share`, `or_top1_model` | `rankings-daily`. 한 요청은 최대 366일이라 더 길면 나눠 요청합니다. 키가 없으면 비웁니다. UTC 기준 아직 끝나지 않은 오늘은 뺍니다 |
-| Spot, Hugging Face, Vast 가용 대수, `overall`, Vast 최저가 | 공개 이력이 없으므로 항상 비웁니다. 가용 대수는 일일 수집이 쌓인 뒤부터 CSV에 있습니다 |
+| Spot, Hugging Face, Vast 가용 대수, OpenRouter 가격, `overall`, Vast 최저가 | 공개 이력이 없으므로 항상 비웁니다. 가용 대수와 토큰 가격은 일일 수집이 쌓인 뒤부터 CSV에 있습니다 |
 
 ```bash
 python -m ai_demand.backfill6m --start 2026-05-15

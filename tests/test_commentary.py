@@ -87,11 +87,10 @@ def test_full_commentary_names_the_push_moves_and_trends():
         ("vast_price", -1),
         ("pjm", 1),
         ("openrouter", 1),
-        ("spot", 0),
         verdict="Stable",
     )
     text = "\n".join(build_commentary(view, score, merge_history(rows, []), notes="vast: dod vs backfill"))
-    assert "4개 지표 중 강세 2 · 중립 1 · 약세 1" in text
+    assert "3개 지표 중 강세 2 · 중립 0 · 약세 1" in text
     assert "강세: OpenRouter 토큰 7일 평균 상회, PJM 야간부하 7일 평균 상회" in text
     assert "약세: Vast 중간가 하락" in text
     assert "백필 일별값과 비교" in text
@@ -102,10 +101,17 @@ def test_full_commentary_names_the_push_moves_and_trends():
     assert "vLLM" not in text
     assert "PJM 야간 7일평균" in text
     assert "Vast H100 중간가 7일평균" in text
-    assert "Spot 중단률: 7일 전보다 상승 2 · 하락 1 · 보합 1" in text
+    assert "Spot" not in text
     assert "수요 우위 국면" in text
     assert "난방 수요" in text
     assert len(text.splitlines()) <= 10
+
+
+def test_cheaper_tokens_and_higher_usage_get_their_own_line():
+    view = _view(or_total=120, or_previous=100, or_weighted_price=1.0, or_weighted_prev=2.0)
+    text = "\n".join(build_commentary(view, _score(("openrouter", 1), verdict="Stable"), {}))
+    assert "더 싼 모델로 수요가 옮겨" in text
+    assert "종합" not in text
 
 
 def test_price_and_availability_are_read_together():

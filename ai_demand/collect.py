@@ -18,16 +18,16 @@ from zoneinfo import ZoneInfo
 
 from ai_demand.backfill import backfill
 from ai_demand.backfill6m import BACKFILL_6M_CSV
-from ai_demand.commentary import merge_history
+from ai_demand.commentary import merge_history, moving_average
 from ai_demand.config import SPOT_COLUMNS, SPOT_INSTANCES, VAST_DISPLAY
 from ai_demand.errors import SourceError
 from ai_demand.huggingface import fetch_huggingface, implied_download, implied_moving_average
 from ai_demand.openrouter import fetch_openrouter
+from ai_demand.openrouter_price import fetch_price_catalog, flagship_prices, price_usage
 from ai_demand.history import (
     DEFAULT_CSV,
     parse_optional_float,
     previous_row,
-    previous_spots,
     read_rows,
     row_from_view,
     row_on_or_before,
@@ -98,6 +98,7 @@ def build_notes(
     pjm_latest_incomplete: bool = False,
     pjm_prior_gap: bool = False,
     openrouter_failure: str | None = None,
+    openrouter_price_failure: str | None = None,
     hf_failure: str | None = None,
     hf_partial: str | None = None,
 ) -> str:
@@ -132,6 +133,8 @@ def build_notes(
             notes.append("pjm: prior gap")
     if openrouter_failure:
         notes.append(openrouter_failure)
+    if openrouter_price_failure:
+        notes.append(openrouter_price_failure)
     if hf_failure:
         notes.append(hf_failure)
     elif hf_partial:
@@ -256,6 +259,7 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
     pypi, pypi_exc = _capture("vllm", fetch_pypi)
     pjm, pjm_exc = _capture("pjm", fetch_pjm)
     openrouter, or_exc = _capture("openrouter", fetch_openrouter)
+    price_catalog, price_exc = _capture("openrouter_price", fetch_price_catalog)
     huggingface, hf_exc = _capture("hf", fetch_huggingface)
 
     try:
@@ -280,6 +284,9 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
             or_top1=openrouter.top1_model,
             or_date=openrouter.day,
         )
+    price_note = _apply_openrouter_prices(view, openrouter, price_catalog, price_exc, previous, rows, today_date)
+    view = price_note[0]
+    openrouter_price_failure = price_note[1]
     previous_alltime = None
     if previous is not None and (previous.get("hf_basket_alltime") or "").strip():
         previous_alltime = int(previous["hf_basket_alltime"])
@@ -306,7 +313,7 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
             vast_avail_reason="응답에 없음",
         )
     # Spot score uses the same previous row as the ↑/↓ arrow: the average of its r values.
-    scored = score_view(view, previous_spots(previous))
+    scored = score_view(view)
     view = replace(view, overall=scored.verdict)
     log.info(
         "score total=%s verdict=%s signals=%s",
@@ -335,6 +342,7 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
         pjm_latest_incomplete=bool(pjm is not None and pjm.latest_incomplete),
         pjm_prior_gap=bool(pjm is not None and pjm.prior_gap),
         openrouter_failure=None if or_exc is None else failure_note("openrouter", or_exc),
+        openrouter_price_failure=openrouter_price_failure,
         hf_failure=None if hf_exc is None else failure_note("hf", hf_exc),
         hf_partial=(
             None
@@ -364,6 +372,78 @@ def collect(path: Path = DEFAULT_CSV, dry_run: bool = False, today: date | None 
     _maybe_send(message, dry_run=False)
     publish_charts(daily_rows=rows, backfill_rows=backfill_rows, view=view, dry_run=False)
     return 0 if any_ok else 1
+
+
+def _apply_openrouter_prices(view, reading, catalog, price_exc, previous, rows, today: date):
+    """Fill weighted and flagship prices. A catalog failure does not drop the reading."""
+    if catalog is None:
+        reason = failure_reason_ko(price_exc)
+        note = None if price_exc is None else failure_note("openrouter_price", price_exc)
+        return replace(view, or_price_reason=reason), note
+    gpt, claude, gemini = flagship_prices(catalog)
+    log.info("flagship usd/1M gpt=%s claude=%s gemini=%s", gpt, claude, gemini)
+    missing = [name for name, value in (("gpt", gpt), ("claude", claude), ("gemini", gemini)) if value is None]
+    note = None if not missing else "openrouter_price: flagship missing " + ",".join(missing)
+    quote = None if reading is None else price_usage(reading.model_tokens, catalog, day_tokens=reading.total_tokens)
+    if quote is None:
+        reason = view.or_reason if reading is None else "매칭 없음"
+        return (
+            replace(
+                view,
+                or_price_gpt=gpt,
+                or_price_claude=claude,
+                or_price_gemini=gemini,
+                or_price_reason=reason,
+            ),
+            note,
+        )
+    previous_price = None if previous is None else parse_optional_float(previous.get("or_weighted_price"))
+    previous_spend = None if previous is None else parse_optional_float(previous.get("or_est_spend_usd"))
+    log.info(
+        "or weighted price=%s coverage=%s spend=%s flagships=%s/%s/%s",
+        f"{quote.usd_per_million:.4f}",
+        f"{quote.coverage:.3f}",
+        f"{quote.spend_usd:.2f}",
+        gpt,
+        claude,
+        gemini,
+    )
+    return (
+        replace(
+            view,
+            or_weighted_price=quote.usd_per_million,
+            or_weighted_prev=previous_price,
+            or_weighted_ma=_column_ma(rows, today, "or_weighted_price", quote.usd_per_million),
+            or_price_coverage=quote.coverage,
+            or_est_spend_usd=quote.spend_usd,
+            or_spend_prev=previous_spend,
+            or_spend_ma=_column_ma(rows, today, "or_est_spend_usd", quote.spend_usd),
+            or_price_gpt=gpt,
+            or_price_claude=claude,
+            or_price_gemini=gemini,
+            or_price_reason="응답에 없음",
+        ),
+        note,
+    )
+
+
+def _column_ma(rows: list[dict[str, str]], today: date, column: str, current: float) -> float | None:
+    """Contiguous 7-day mean of one CSV column, including today's value."""
+    series: dict[date, float] = {}
+    today_text = today.isoformat()
+    for row in rows:
+        raw_day = row.get("date_kst") or ""
+        if raw_day >= today_text:
+            continue
+        value = parse_optional_float(row.get(column))
+        if value is None:
+            continue
+        try:
+            series[date.fromisoformat(raw_day)] = value
+        except ValueError:
+            continue
+    series[today] = current
+    return moving_average(series, today)
 
 
 def _availability_prev(row: dict | None) -> dict[str, int | None]:

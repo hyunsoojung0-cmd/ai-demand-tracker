@@ -27,6 +27,8 @@ class OpenRouterDay:
     total_tokens: int
     top1_model: str
     top5_share: float
+    # Every row that day, including ``other``. Used to weight token prices.
+    models: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,7 @@ class OpenRouterReading:
     ma_7d: float | None
     top1_model: str
     top5_share: float
+    model_tokens: tuple[tuple[str, int], ...] = ()
 
 
 def _tokens(value) -> int | None:
@@ -90,6 +93,7 @@ def daily_totals(payload: dict, today_utc: date) -> list[OpenRouterDay]:
                 total_tokens=total,
                 top1_model=models[0][0],
                 top5_share=top5 / total,
+                models=tuple(rows),
             )
         )
     if not summaries:
@@ -117,6 +121,7 @@ def summarize(days: list[OpenRouterDay]) -> OpenRouterReading:
         ma_7d=average,
         top1_model=latest.top1_model,
         top5_share=latest.top5_share,
+        model_tokens=latest.models,
     )
 
 

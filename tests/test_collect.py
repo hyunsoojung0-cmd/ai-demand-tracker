@@ -68,6 +68,11 @@ def _patch_success(monkeypatch):
 
     monkeypatch.setattr("ai_demand.collect.fetch_openrouter", _openrouter)
     monkeypatch.setattr("ai_demand.collect.fetch_huggingface", _huggingface)
+
+    def _prices():
+        raise SourceError("request_failed")
+
+    monkeypatch.setattr("ai_demand.collect.fetch_price_catalog", _prices)
     monkeypatch.setattr(
         "ai_demand.collect.fetch_vast_availability",
         lambda: {"h100": 13, "h200": 14, "b200": 10},
@@ -107,7 +112,8 @@ def test_collect_replaces_today_and_keeps_the_backfill_row(tmp_path, monkeypatch
     )
     assert collect(path, today=date(2026, 11, 15)) == 0
     message = capsys.readouterr().out
-    assert "us-east-1 p5 (H100): 1단계 (<5%)" in message
+    assert "AWS Spot" not in message
+    assert "us-east-1 p5" not in message
     assert "7일전" not in message
     assert "↑" not in message
     assert "H100 $2.67 (Δ +33.3%)" in message
@@ -136,7 +142,7 @@ def test_collect_replaces_today_and_keeps_the_backfill_row(tmp_path, monkeypatch
     assert today["overall"] == "Stable"
     assert today["notes"] == (
         "vast: dod vs backfill; pjm: EIA_API_KEY missing; "
-        "openrouter: OPENROUTER_API_KEY missing; hf: request failed"
+        "openrouter: OPENROUTER_API_KEY missing; openrouter_price: request failed; hf: request failed"
     )
     assert today["or_total_tokens"] == ""
     assert today["hf_basket_alltime"] == ""
@@ -174,11 +180,8 @@ def test_collect_message_compares_each_spot_with_prior_day_and_week(tmp_path, mo
     )
     assert collect(path, today=date(2026, 11, 15)) == 0
     message = capsys.readouterr().out
-    assert "us-east-1 p5 (H100): 1단계 (<5%) → (전일 동일, 7일전 1단계)" in message
-    assert "us-east-1 p4d (A100): 4단계 (15-20%) ↑ (전일 3단계, 7일전 2단계)" in message
-    assert "us-west-2 p5 (H100): 1단계 (<5%) ↓ (전일 2단계, 7일전 1단계)" in message
-    assert "us-west-2 p4d (A100): 5단계 (>20%) → (전일 동일, 7일전 3단계)" in message
-    # Per-line arrows disagree, but the four-bucket average is unchanged (1.75), so Spot stays 0.
+    assert "AWS Spot" not in message
+    assert "us-east-1" not in message
     assert "종합: Stable" in message
     rows = read_rows(path)
     assert [row["date_kst"] for row in rows] == ["2026-11-08", "2026-11-14", "2026-11-15"]
@@ -216,6 +219,7 @@ def test_all_sources_failing_exits_nonzero(tmp_path, monkeypatch, capsys):
         "fetch_pypi",
         "fetch_pjm",
         "fetch_openrouter",
+        "fetch_price_catalog",
         "fetch_huggingface",
     ):
         monkeypatch.setattr(f"ai_demand.collect.{name}", boom)
@@ -226,7 +230,8 @@ def test_all_sources_failing_exits_nonzero(tmp_path, monkeypatch, capsys):
     assert row["spot_use1_p5"] == ""
     assert row["notes"] == (
         "spot: request failed; vast: request failed; vast_avail: request failed; "
-        "vllm: request failed; pjm: request failed; openrouter: request failed; hf: request failed"
+        "vllm: request failed; pjm: request failed; openrouter: request failed; "
+        "openrouter_price: request failed; hf: request failed"
     )
     assert "데이터 없음 (요청 실패)" in capsys.readouterr().out
 
@@ -301,6 +306,7 @@ def test_fallback_skips_collection_and_telegram_when_today_exists(tmp_path, monk
         "fetch_pypi",
         "fetch_pjm",
         "fetch_openrouter",
+        "fetch_price_catalog",
         "fetch_huggingface",
     ):
         monkeypatch.setattr(f"ai_demand.collect.{name}", boom)

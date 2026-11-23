@@ -29,7 +29,9 @@ def test_header_matches_the_sheet_contract():
         "pjm_overnight_mw,pjm_overnight_7d_ma,overall,notes,"
         "or_total_tokens,or_top5_share,or_top1_model,"
         "hf_basket_30d,hf_basket_alltime,hf_implied_daily,"
-        "vast_h100_avail,vast_h200_avail,vast_b200_avail"
+        "vast_h100_avail,vast_h200_avail,vast_b200_avail,"
+        "or_weighted_price,or_price_coverage,or_est_spend_usd,"
+        "or_price_gpt,or_price_claude,or_price_gemini"
     )
 
 
