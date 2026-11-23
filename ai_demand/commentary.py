@@ -84,6 +84,7 @@ def overlay_live(history: dict[date, dict[str, str]], view: DayView) -> dict[dat
     _put(row, "vllm_last_day", view.vllm_last_day)
     _put(row, "pjm_overnight_mw", view.pjm_mw)
     _put(row, "or_total_tokens", view.or_total)
+    _put(row, "or_weighted_price", view.or_weighted_price)
     _put(row, "hf_implied_daily", view.hf_implied)
     for key, quote in view.vast.items():
         if quote is not None and quote.median is not None:
@@ -411,6 +412,27 @@ def _interpretation(view: DayView, score: Score, history: dict[date, dict[str, s
     return "💡 해설: " + " ".join(sentences[:2])
 
 
+def _token_price_comment(view: DayView) -> str | None:
+    """Price versus usage. Not part of the verdict."""
+    price = pct_change(view.or_weighted_price, view.or_weighted_prev)
+    usage = pct_change(view.or_total, view.or_previous)
+    if price is None or usage is None:
+        return None
+    cheaper = price < -TREND_FLAT
+    dearer = price > TREND_FLAT
+    busier = usage > TREND_FLAT
+    quieter = usage < -TREND_FLAT
+    if cheaper and busier:
+        return "💬 토큰 가격: 가격은 내리고 사용량은 늘어 더 싼 모델로 수요가 옮겨 갑니다."
+    if dearer and quieter:
+        return "💬 토큰 가격: 가격은 오르고 사용량은 줄어 비싼 모델 비중이 커진 모습입니다."
+    if cheaper and quieter:
+        return "💬 토큰 가격: 사용량과 가중 가격이 함께 내리고 있습니다."
+    if dearer and busier:
+        return "💬 토큰 가격: 사용량과 가중 가격이 함께 오르고 있습니다."
+    return None
+
+
 def build_commentary(
     view: DayView,
     score: Score,
@@ -424,6 +446,9 @@ def build_commentary(
         lines.extend(_moves(view, series, notes))
         lines.extend(_trend_lines(view, series))
         lines.append(_interpretation(view, score, series, notes))
+        price_line = _token_price_comment(view)
+        if price_line:
+            lines.append(price_line)
         return lines
     except Exception:
         return ["💡 해설: 해설을 만들지 못했습니다."]

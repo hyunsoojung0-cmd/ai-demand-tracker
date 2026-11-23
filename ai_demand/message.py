@@ -138,6 +138,23 @@ def _openrouter_line(view: DayView) -> str:
     return f"1. OpenRouter 일일 토큰: {_billions(view.or_total)} ({label}, {compared})"
 
 
+def _price_per_million(value: float) -> str:
+    return f"${value:,.2f}/1M"
+
+
+def _coverage(frac: float) -> str:
+    return f"매칭 {frac * 100:.0f}%"
+
+
+def _openrouter_price_line(view: DayView) -> str:
+    if view.or_weighted_price is None or view.or_date is None:
+        return f"6. OpenRouter 가중 가격: {_missing(view.or_price_reason)}"
+    label = f"{view.or_date.month}/{view.or_date.day} UTC"
+    compared = _comparison_bits(view.or_weighted_price, view.or_weighted_prev, view.or_weighted_ma)
+    coverage = "" if view.or_price_coverage is None else f", {_coverage(view.or_price_coverage)}"
+    return f"6. OpenRouter 가중 가격: {_price_per_million(view.or_weighted_price)} ({label}, {compared}{coverage})"
+
+
 def _score_for(view: DayView, score: Score | None) -> Score:
     if score is not None:
         return score
@@ -158,6 +175,7 @@ def render(
         _avail_line(view),
         _spot_line(view),
         _pjm_line(view),
+        _openrouter_price_line(view),
         f"종합: {view.overall}",
     ]
     lines.extend(build_commentary(view, _score_for(view, score), history, notes))

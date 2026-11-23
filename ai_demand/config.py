@@ -55,8 +55,20 @@ PYPI_RECENT_URL = "https://pypistats.org/api/packages/vllm/recent"
 PYPI_OVERALL_URL = "https://pypistats.org/api/packages/vllm/overall"
 EIA_URL = "https://api.eia.gov/v2/electricity/rto/region-data/data/"
 OPENROUTER_RANKINGS_URL = "https://openrouter.ai/api/v1/datasets/rankings-daily"
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 # Days requested, ending yesterday UTC, so the window covers a 7-day average.
 OPENROUTER_LOOKBACK_DAYS = 10
+# Rankings-daily publishes total_tokens only (prompt + completion combined).
+# The blended price is therefore an assumption: 3 parts prompt, 1 part completion.
+OR_PRICE_PROMPT_WEIGHT = 3
+OR_PRICE_COMPLETION_WEIGHT = 1
+# Suffixes stripped when a rankings permaslug is a variant of a catalog id.
+# ``:free`` is not looked up: that variant is priced at zero.
+OR_PRICE_VARIANTS = (":extended", ":beta", ":nitro", ":floor", ":online", ":thinking", ":exacto", ":batch")
+# First id present in the public catalog is the representative flagship.
+OR_FLAGSHIP_GPT = ("openai/gpt-6.2-astra", "openai/gpt-5.6-sol")
+OR_FLAGSHIP_CLAUDE = ("anthropic/claude-fable-5.2", "anthropic/claude-sonnet-5.5")
+OR_FLAGSHIP_GEMINI = ("google/gemini-4-neon", "google/gemini-4-hydrogen")
 HUGGINGFACE_MODEL_URL = "https://huggingface.co/api/models/{repo_id}"
 
 # Official flagship repos. gpt2 is intentionally excluded. Each id was checked
@@ -174,6 +186,12 @@ HISTORY_COLUMNS = (
     "vast_h100_avail",
     "vast_h200_avail",
     "vast_b200_avail",
+    "or_weighted_price",
+    "or_price_coverage",
+    "or_est_spend_usd",
+    "or_price_gpt",
+    "or_price_claude",
+    "or_price_gemini",
 )
 
 HISTORY_HEADER = ",".join(HISTORY_COLUMNS)

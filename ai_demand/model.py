@@ -43,6 +43,15 @@ class DayView:
     or_top1: str | None = None
     or_date: date | None = None
     or_reason: str = "요청 실패"
+    or_weighted_price: float | None = None
+    or_weighted_prev: float | None = None
+    or_weighted_ma: float | None = None
+    or_price_coverage: float | None = None
+    or_est_spend_usd: float | None = None
+    or_price_gpt: float | None = None
+    or_price_claude: float | None = None
+    or_price_gemini: float | None = None
+    or_price_reason: str = "요청 실패"
     hf_30d: int | None = None
     hf_alltime: int | None = None
     hf_implied: int | None = None

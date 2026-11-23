@@ -149,6 +149,12 @@ def row_from_view(view: DayView, notes: str) -> dict[str, str]:
     for key, _display in VAST_DISPLAY:
         count = view.vast_avail.get(key)
         row[f"vast_{key}_avail"] = format_int(None if count is None else int(count))
+    row["or_weighted_price"] = format_number(view.or_weighted_price, PRICE_DECIMALS)
+    row["or_price_coverage"] = format_number(view.or_price_coverage, PRICE_DECIMALS)
+    row["or_est_spend_usd"] = format_number(view.or_est_spend_usd, AVERAGE_DECIMALS)
+    row["or_price_gpt"] = format_number(view.or_price_gpt, PRICE_DECIMALS)
+    row["or_price_claude"] = format_number(view.or_price_claude, PRICE_DECIMALS)
+    row["or_price_gemini"] = format_number(view.or_price_gemini, PRICE_DECIMALS)
     return row
 
 
@@ -161,6 +167,8 @@ def assert_header_contract() -> None:
         "pjm_overnight_mw,pjm_overnight_7d_ma,overall,notes,"
         "or_total_tokens,or_top5_share,or_top1_model,"
         "hf_basket_30d,hf_basket_alltime,hf_implied_daily,"
-        "vast_h100_avail,vast_h200_avail,vast_b200_avail"
+        "vast_h100_avail,vast_h200_avail,vast_b200_avail,"
+        "or_weighted_price,or_price_coverage,or_est_spend_usd,"
+        "or_price_gpt,or_price_claude,or_price_gemini"
     ):
         raise RuntimeError("history header drifted from the sheet contract")

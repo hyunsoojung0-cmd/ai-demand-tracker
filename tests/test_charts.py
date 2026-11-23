@@ -66,6 +66,19 @@ def test_availability_and_spot_charts_wait_for_two_days(tmp_path):
     assert names == {"openrouter.png", "vast_price.png", "pjm.png"}
 
 
+def test_weighted_price_chart_waits_for_two_days(tmp_path):
+    day = date(2026, 11, 16)
+    one = [{"date_kst": day.isoformat(), "or_weighted_price": "1.5", "or_total_tokens": "1000", "vast_h100_median": "2", "pjm_overnight_mw": "80000"}]
+    names = {item.path.name for item in render_charts(merge_history(one, []), tmp_path / "one", day, days=10, korean=False)}
+    assert "or_price.png" not in names
+    two = [
+        {"date_kst": (day - timedelta(days=1)).isoformat(), "or_weighted_price": "1.2"},
+        {"date_kst": day.isoformat(), "or_weighted_price": "1.5"},
+    ]
+    made = render_charts(merge_history(two, []), tmp_path / "two", day, days=10, korean=False)
+    assert "or_price.png" in {item.path.name for item in made}
+
+
 def test_empty_history_writes_no_charts(tmp_path):
     assert render_charts({}, tmp_path, date(2026, 11, 16), days=10, korean=False) == []
 

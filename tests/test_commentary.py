@@ -108,6 +108,13 @@ def test_full_commentary_names_the_push_moves_and_trends():
     assert len(text.splitlines()) <= 10
 
 
+def test_cheaper_tokens_and_higher_usage_get_their_own_line():
+    view = _view(or_total=120, or_previous=100, or_weighted_price=1.0, or_weighted_prev=2.0)
+    text = "\n".join(build_commentary(view, _score(("openrouter", 1), verdict="Stable"), {}))
+    assert "더 싼 모델로 수요가 옮겨" in text
+    assert "종합" not in text
+
+
 def test_price_and_availability_are_read_together():
     tight = _view(
         vast_avail={"h100": 8, "h200": 8, "b200": 4},

@@ -151,6 +151,7 @@ def render_charts(
         _availability_chart,
         _spot_chart,
         _pjm_chart,
+        _or_price_chart,
     )
     for builder in builders:
         item = builder(merged, dest, end, days, use_korean)
@@ -197,6 +198,32 @@ def _openrouter_chart(merged, dest, end, days, korean) -> ChartFile | None:
             (dates, average, ma_label, _AMBER, "--"),
         ],
         lambda value: f"{value:.1f}T",
+        caption=title,
+    )
+
+
+def _or_price_chart(merged, dest, end, days, korean) -> ChartFile | None:
+    full_dates, full_prices = aligned_values(merged, end, "or_weighted_price", days, lookback=WINDOW_DAYS - 1)
+    full_ma = _trailing_ma(full_prices)
+    offset = WINDOW_DAYS - 1
+    dates = full_dates[offset:]
+    prices = full_prices[offset:]
+    average = full_ma[offset:]
+    points = sum(value is not None for value in prices)
+    if points < MIN_SERIES_DAYS:
+        log.info("openrouter price chart skipped (%s day(s))", points)
+        return None
+    title, subtitle = _copy(korean, "or_price")
+    daily, ma_label = ("일일", "7일 평균") if korean else ("daily", "7-day")
+    return _draw(
+        dest / "or_price.png",
+        title,
+        subtitle,
+        [
+            (dates, prices, daily, _BLUE, "-"),
+            (dates, average, ma_label, _AMBER, "--"),
+        ],
+        lambda value: f"${value:.2f}",
         caption=title,
     )
 
@@ -306,6 +333,10 @@ def _copy(korean: bool, kind: str) -> tuple[str, str]:
         "openrouter": (
             ("OpenRouter 일일 토큰", "조 토큰 (T) · 최근 90일"),
             ("OpenRouter daily tokens", "trillion tokens (T) · last 90 days"),
+        ),
+        "or_price": (
+            ("OpenRouter 가중 가격", "USD/1M 토큰 · 입력 3 : 출력 1 · 최근 90일"),
+            ("OpenRouter weighted price", "USD per 1M tokens · 3:1 prompt:completion · last 90 days"),
         ),
         "vast_price": (
             ("Vast.ai 중간 가격", "달러/시간 · 최근 90일 · 백필 일일 중간값에서 실시간 중간값으로 이어짐"),

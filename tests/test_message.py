@@ -12,6 +12,7 @@ EXPECTED = """\
 3. Vast.ai 대여 가능: 데이터 없음 (요청 실패)
 4. AWS Spot 중단률: us-east-1 p5 (H100): 1단계 (<5%) · us-east-1 p4d (A100): 4단계 (15-20%) · us-west-2 p5 (H100): 1단계 (<5%) · us-west-2 p4d (A100): 5단계 (>20%)
 5. PJM 야간 기저부하: 데이터 없음 (EIA_API_KEY 없음)
+6. OpenRouter 가중 가격: 데이터 없음 (요청 실패)
 종합: Stable
 📝 판단 근거: 2개 지표 중 강세 1 · 중립 1 · 약세 0
    Vast 중간가 상승
